@@ -6,6 +6,9 @@ const pdfService = require("../services/pdfService");
 exports.sendMessage = async (req, res) => {
   try {
     const { pdfId, message } = req.body;
+    console.log("=== Chat Controller Debug ===");
+    console.log("PDF ID:", pdfId);
+    console.log("Message:", message);
 
     if (!pdfId || !message) {
       return res.status(400).json({ error: "PDF ID and message are required" });
@@ -13,10 +16,20 @@ exports.sendMessage = async (req, res) => {
 
     const pdf = await PDF.findById(pdfId);
     if (!pdf) {
+      console.log("PDF not found in database");
       return res.status(404).json({ error: "PDF not found" });
     }
 
+    console.log("Found PDF:", pdf.originalName);
+    console.log("PDF content length:", pdf.content ? pdf.content.length : 0);
+    console.log("PDF chunks count:", pdf.chunks ? pdf.chunks.length : 0);
+    console.log(
+      "PDF content preview:",
+      pdf.content ? pdf.content.substring(0, 200) : "No content"
+    );
+
     const relevantChunks = pdfService.findRelevantChunks(pdf.chunks, message);
+    console.log("Relevant chunks found:", relevantChunks.length);
 
     let conversation = await Conversation.findOne({ pdfId });
     if (!conversation) {

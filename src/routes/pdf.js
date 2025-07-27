@@ -19,4 +19,21 @@ router.get("/", pdfController.getPDFs);
 router.get("/:id", pdfController.getPDF);
 router.delete("/:id", pdfController.deletePDF);
 
+// Add clear all endpoint for debugging
+router.delete("/clear/all", async (req, res) => {
+  try {
+    const PDF = require("../models/PDF");
+    const Conversation = require("../models/Conversation");
+
+    await PDF.deleteMany({});
+    await Conversation.deleteMany({});
+
+    console.log("All PDFs and conversations cleared");
+    res.json({ message: "All data cleared successfully" });
+  } catch (error) {
+    console.error("Clear error:", error);
+    res.status(500).json({ error: "Failed to clear data" });
+  }
+});
+
 module.exports = router;
