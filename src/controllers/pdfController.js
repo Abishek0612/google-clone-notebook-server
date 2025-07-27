@@ -92,11 +92,14 @@ exports.getPDF = async (req, res) => {
     const stat = fs.statSync(pdf.path);
 
     res.removeHeader("X-Frame-Options");
+    res.removeHeader("Content-Security-Policy");
+
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", stat.size);
     res.setHeader("Content-Disposition", "inline");
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Cache-Control", "public, max-age=3600");
+
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
     res.setHeader(
@@ -107,6 +110,7 @@ exports.getPDF = async (req, res) => {
       "Access-Control-Expose-Headers",
       "Content-Length, Content-Range"
     );
+
     res.setHeader("X-Frame-Options", "ALLOWALL");
 
     const stream = fs.createReadStream(pdf.path);

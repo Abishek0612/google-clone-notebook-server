@@ -1,401 +1,412 @@
 const axios = require("axios");
 
 class AIService {
+  constructor() {
+    this.provider = process.env.AI_PROVIDER || "gemini";
+    this.geminiApiKey = process.env.GEMINI_API_KEY;
+
+    if (!this.geminiApiKey) {
+      throw new Error("GEMINI_API_KEY not found in environment variables");
+    }
+  }
+
   async generateResponse(context, question, relevantChunks) {
-    console.log("=== AI Service Debug ===");
-    console.log("Question:", question);
-    console.log(
-      "Context preview:",
-      context ? context.substring(0, 500) : "No context"
-    );
-
     try {
-      return this.directTextSearch(question, context);
+      if (!question || question.trim().length === 0) {
+        throw new Error("Question cannot be empty");
+      }
+
+      if (!this.geminiApiKey) {
+        throw new Error("Gemini API key not configured");
+      }
+
+      const contextText = this.prepareContext(relevantChunks, context);
+
+      if (!contextText || contextText.trim().length === 0) {
+        throw new Error("No content available to analyze");
+      }
+
+      const response = await this.callGeminiAPI(question, contextText);
+      const citations = this.extractCitations(relevantChunks);
+
+      return {
+        answer: response,
+        citations: citations,
+      };
     } catch (error) {
-      console.error("AI Service Error:", error.message);
-      return { answer: "Error analyzing document.", citations: [] };
+      throw new Error(`AI Service failed: ${error.message}`);
     }
   }
 
-  directTextSearch(question, text) {
-    if (!text || text.length < 10) {
-      return { answer: "Document content not available.", citations: [] };
-    }
-
-    const questionLower = question.toLowerCase().trim();
-    console.log("Searching for:", questionLower);
-
-    // Add IRN handler
-    if (questionLower === "irn" || questionLower.includes("irn")) {
-      return this.findIRN(text);
-    }
-
-    if (questionLower.includes("ack") && questionLower.includes("no")) {
-      return this.findAckNo(text);
-    }
-
-    if (questionLower.includes("ack") && questionLower.includes("date")) {
-      return this.findAckDate(text);
-    }
-
-    if (questionLower.includes("invoice") && questionLower.includes("no")) {
-      return this.findInvoiceNumber(text);
-    }
-
-    if (questionLower.includes("invoice number")) {
-      return this.findInvoiceNumber(text);
-    }
-
-    if (questionLower.includes("company") || questionLower.includes("from")) {
-      return this.findCompany(text);
-    }
+  prepareContext(relevantChunks, fullContext) {
+    let contextText = "";
 
     if (
-      questionLower.includes("bill to") ||
-      questionLower.includes("customer") ||
-      questionLower.includes("buyer")
+      relevantChunks &&
+      Array.isArray(relevantChunks) &&
+      relevantChunks.length > 0
     ) {
-      return this.findBillTo(text);
+      const validChunks = relevantChunks
+        .map((chunk) => this.extractChunkData(chunk))
+        .filter((chunkData) => {
+          return (
+            chunkData &&
+            chunkData.text &&
+            typeof chunkData.text === "string" &&
+            chunkData.text.trim().length > 0
+          );
+        });
+
+      if (validChunks.length === 0) {
+        contextText = fullContext || "";
+      } else {
+        contextText = validChunks
+          .map((chunkData) => chunkData.text.trim())
+          .join("\n\n");
+      }
+    } else if (fullContext && typeof fullContext === "string") {
+      contextText = fullContext;
+    } else {
+      throw new Error("No context available");
     }
 
-    if (
-      questionLower.includes("consignee") ||
-      questionLower.includes("ship to")
-    ) {
-      return this.findConsignee(text);
+    if (!contextText || contextText.trim().length === 0) {
+      throw new Error("Prepared context is empty");
     }
 
-    if (questionLower.includes("address")) {
-      return this.findAddress(text);
+    const maxContextLength = 25000;
+
+    if (contextText.length > maxContextLength) {
+      const firstPart = contextText.substring(
+        0,
+        Math.floor(maxContextLength * 0.7)
+      );
+      const lastPart = contextText.substring(
+        contextText.length - Math.floor(maxContextLength * 0.3)
+      );
+      contextText =
+        firstPart + "\n\n[... content truncated ...]\n\n" + lastPart;
     }
 
-    if (questionLower.includes("gstin") || questionLower.includes("gst")) {
-      return this.findGSTIN(text);
-    }
-
-    if (
-      questionLower.includes("phone") ||
-      questionLower.includes("contact") ||
-      questionLower.includes("email")
-    ) {
-      return this.findContact(text);
-    }
-
-    if (questionLower.includes("amount") || questionLower.includes("total")) {
-      return this.findAmount(text);
-    }
-
-    // General search
-    return this.generalSearch(question, text);
+    return contextText;
   }
 
-  findIRN(text) {
-    console.log("Looking for IRN...");
+  extractChunkData(chunk) {
+    if (!chunk) {
+      return null;
+    }
 
-    // Look for IRN pattern in the text
-    const lines = text.split("\n");
-    let irnFound = false;
-    let irnValue = "";
+    if (chunk._doc && typeof chunk._doc === "object") {
+      return {
+        text: chunk._doc.text,
+        page: chunk._doc.page || 1,
+        startIndex: chunk._doc.startIndex,
+        endIndex: chunk._doc.endIndex,
+      };
+    }
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
+    if (typeof chunk.toObject === "function") {
+      const obj = chunk.toObject();
+      return {
+        text: obj.text,
+        page: obj.page || 1,
+        startIndex: obj.startIndex,
+        endIndex: obj.endIndex,
+      };
+    }
 
-      if (line.includes("IRN:") || line === "IRN") {
-        irnFound = true;
-        // IRN value might be on the same line or next line
-        if (line.includes("IRN:")) {
-          irnValue = line.replace("IRN:", "").trim();
+    if (chunk.text && typeof chunk.text === "string") {
+      return {
+        text: chunk.text,
+        page: chunk.page || 1,
+        startIndex: chunk.startIndex,
+        endIndex: chunk.endIndex,
+      };
+    }
+
+    if (typeof chunk === "object") {
+      const possibleTextPaths = [
+        chunk.text,
+        chunk.content,
+        chunk.data?.text,
+        chunk.document?.text,
+      ];
+
+      for (const textPath of possibleTextPaths) {
+        if (
+          textPath &&
+          typeof textPath === "string" &&
+          textPath.trim().length > 0
+        ) {
+          return {
+            text: textPath,
+            page: chunk.page || chunk.data?.page || 1,
+            startIndex: chunk.startIndex || chunk.data?.startIndex,
+            endIndex: chunk.endIndex || chunk.data?.endIndex,
+          };
         }
-        // If IRN value is not on same line, check next lines
-        if (!irnValue && i + 1 < lines.length) {
-          const nextLine = lines[i + 1].trim();
-          if (nextLine.length > 10) {
-            irnValue = nextLine;
+      }
+    }
+
+    return null;
+  }
+
+  async callGeminiAPI(question, context) {
+    if (!this.geminiApiKey || !this.geminiApiKey.startsWith("AIza")) {
+      throw new Error("Invalid Gemini API key");
+    }
+
+    const prompt = this.buildPrompt(question, context);
+
+    const requestBody = {
+      contents: [
+        {
+          parts: [
+            {
+              text: prompt,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.2,
+        topK: 40,
+        topP: 0.8,
+        maxOutputTokens: 2048,
+        candidateCount: 1,
+      },
+      safetySettings: [
+        {
+          category: "HARM_CATEGORY_HARASSMENT",
+          threshold: "BLOCK_NONE",
+        },
+        {
+          category: "HARM_CATEGORY_HATE_SPEECH",
+          threshold: "BLOCK_NONE",
+        },
+        {
+          category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+          threshold: "BLOCK_NONE",
+        },
+        {
+          category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+          threshold: "BLOCK_NONE",
+        },
+      ],
+    };
+
+    const modelsToTry = [
+      "gemini-1.5-flash",
+      "gemini-1.5-pro",
+      "gemini-pro",
+      "models/gemini-1.5-flash",
+      "models/gemini-1.5-pro",
+    ];
+
+    let lastError = null;
+
+    for (const modelName of modelsToTry) {
+      try {
+        const response = await axios.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${this.geminiApiKey}`,
+          requestBody,
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+            timeout: 60000,
           }
+        );
+
+        if (!response.data) {
+          throw new Error("Empty response from Gemini API");
         }
-        if (!irnValue && i + 2 < lines.length) {
-          const nextLine2 = lines[i + 2].trim();
-          if (nextLine2.length > 10) {
-            irnValue = nextLine2;
+
+        if (
+          !response.data.candidates ||
+          response.data.candidates.length === 0
+        ) {
+          if (response.data.promptFeedback) {
+            const feedback = response.data.promptFeedback;
+            if (feedback.blockReason) {
+              throw new Error(
+                `Gemini API blocked request: ${feedback.blockReason}`
+              );
+            }
           }
+          throw new Error("No candidates in Gemini API response");
+        }
+
+        const candidate = response.data.candidates[0];
+
+        if (candidate.finishReason === "SAFETY") {
+          throw new Error("Response blocked by Gemini safety filters");
+        }
+
+        if (candidate.finishReason === "RECITATION") {
+          throw new Error("Response blocked due to recitation concerns");
+        }
+
+        if (
+          !candidate.content ||
+          !candidate.content.parts ||
+          candidate.content.parts.length === 0
+        ) {
+          throw new Error("Invalid content structure in Gemini API response");
+        }
+
+        const generatedText = candidate.content.parts[0].text;
+
+        if (!generatedText || generatedText.trim().length === 0) {
+          throw new Error("Empty text generated by Gemini API");
+        }
+
+        return generatedText.trim();
+      } catch (error) {
+        lastError = error;
+
+        if (error.response && error.response.status === 404) {
+          continue;
         }
         break;
       }
     }
 
-    // Look for the specific IRN pattern we see in the document
-    const irnMatch = text.match(
-      /20c4e72facc35c65188b56ce03a667825484b52db3c-01a8bd2a1d29b4931cc97/
-    );
-    if (irnMatch) {
-      return {
-        answer: `IRN: ${irnMatch[0]}`,
-        citations: [{ page: 1, text: `IRN: ${irnMatch[0]}` }],
-      };
-    }
-
-    // General IRN pattern (long alphanumeric string)
-    const generalIrnMatch = text.match(/IRN[:\s]*([a-f0-9]{64})/i);
-    if (generalIrnMatch) {
-      return {
-        answer: `IRN: ${generalIrnMatch[1]}`,
-        citations: [{ page: 1, text: `IRN: ${generalIrnMatch[1]}` }],
-      };
-    }
-
-    if (irnValue) {
-      return {
-        answer: `IRN: ${irnValue}`,
-        citations: [{ page: 1, text: `IRN: ${irnValue}` }],
-      };
-    }
-
-    return { answer: "IRN not found in the document.", citations: [] };
-  }
-
-  findAckNo(text) {
-    console.log("Looking for Ack No...");
-
-    const ackMatch = text.match(/Ack No[.:]?\s*(\d+)/i);
-    if (ackMatch) {
-      return {
-        answer: `Acknowledgment Number: ${ackMatch[1]}`,
-        citations: [{ page: 1, text: `Ack No: ${ackMatch[1]}` }],
-      };
-    }
-
-    return { answer: "Acknowledgment number not found.", citations: [] };
-  }
-
-  findAckDate(text) {
-    console.log("Looking for Ack Date...");
-
-    const ackDateMatch = text.match(/Ack Date[.:]?\s*(\d{1,2}-\w{3}-\d{2,4})/i);
-    if (ackDateMatch) {
-      return {
-        answer: `Acknowledgment Date: ${ackDateMatch[1]}`,
-        citations: [{ page: 1, text: `Ack Date: ${ackDateMatch[1]}` }],
-      };
-    }
-
-    return { answer: "Acknowledgment date not found.", citations: [] };
-  }
-
-  findConsignee(text) {
-    console.log("Looking for consignee...");
-
-    if (text.includes("Consignee (Ship to)")) {
-      const lines = text.split("\n");
-      const consigneeInfo = [];
-      let foundConsignee = false;
-
-      for (const line of lines) {
-        if (line.includes("Consignee") || line.includes("Ship to")) {
-          foundConsignee = true;
-          continue;
+    if (lastError.response) {
+      if (lastError.response.status === 400) {
+        const errorData = lastError.response.data;
+        if (errorData.error && errorData.error.message) {
+          throw new Error(`Gemini API Bad Request: ${errorData.error.message}`);
+        } else {
+          throw new Error(
+            `Gemini API Bad Request: ${JSON.stringify(errorData)}`
+          );
         }
-        if (foundConsignee && line.trim().length > 5) {
-          consigneeInfo.push(line.trim());
-          if (consigneeInfo.length >= 4) break;
-        }
+      } else if (lastError.response.status === 403) {
+        throw new Error("Gemini API access denied");
+      } else if (lastError.response.status === 429) {
+        throw new Error("Gemini API rate limit exceeded");
+      } else {
+        throw new Error(
+          `Gemini API error (${lastError.response.status}): ${lastError.response.statusText}`
+        );
       }
+    } else {
+      throw new Error(`All Gemini models failed: ${lastError.message}`);
+    }
+  }
+
+  buildPrompt(question, context) {
+    if (!question || typeof question !== "string") {
+      throw new Error("Invalid question provided");
+    }
+
+    if (!context || typeof context !== "string") {
+      throw new Error("Invalid context provided");
+    }
+
+    return `You are a helpful AI assistant that analyzes documents and answers questions based on the provided content.
+
+DOCUMENT CONTENT:
+${context}
+
+QUESTION: ${question}
+
+INSTRUCTIONS:
+- Answer the question based ONLY on the information provided in the document content above
+- Be specific, accurate, and detailed in your response
+- If the exact information is not available in the document, clearly state that
+- Quote relevant parts from the document when appropriate
+- Maintain a professional and helpful tone
+- Do not make assumptions or add information not present in the document
+
+ANSWER:`;
+  }
+
+  extractCitations(relevantChunks) {
+    if (
+      !relevantChunks ||
+      !Array.isArray(relevantChunks) ||
+      relevantChunks.length === 0
+    ) {
+      return [
+        {
+          page: 1,
+          text: "Document content...",
+        },
+      ];
+    }
+
+    return relevantChunks
+      .map((chunk) => this.extractChunkData(chunk))
+      .filter((chunkData) => chunkData && chunkData.text)
+      .map((chunkData) => ({
+        page: chunkData.page || 1,
+        text:
+          chunkData.text.length > 120
+            ? chunkData.text.substring(0, 120) + "..."
+            : chunkData.text,
+      }));
+  }
+
+  async testConnection() {
+    try {
+      const testResponse = await this.callGeminiAPI(
+        "What is artificial intelligence?",
+        "Artificial intelligence (AI) is a branch of computer science that aims to create intelligent machines that can perform tasks that typically require human intelligence."
+      );
 
       return {
-        answer: `Consignee: ${consigneeInfo.join(", ")}`,
-        citations: [{ page: 1, text: consigneeInfo.join(" ") }],
+        success: true,
+        message: "Gemini API is working correctly",
+        response: testResponse,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message,
+        response: null,
+      };
+    }
+  }
+
+  validateApiKey() {
+    if (!this.geminiApiKey) {
+      return {
+        valid: false,
+        message: "API key not provided",
       };
     }
 
-    return { answer: "Consignee information not found.", citations: [] };
-  }
-
-  findContact(text) {
-    console.log("Looking for contact information...");
-
-    const emailMatch = text.match(
-      /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/
-    );
-    if (emailMatch) {
+    if (!this.geminiApiKey.startsWith("AIza")) {
       return {
-        answer: `Email: ${emailMatch[1]}`,
-        citations: [{ page: 1, text: `Email: ${emailMatch[1]}` }],
+        valid: false,
+        message: "API key format invalid",
       };
     }
 
-    return { answer: "Contact information not found.", citations: [] };
-  }
-
-  findInvoiceNumber(text) {
-    console.log("Looking for invoice number...");
-
-    // Look for various invoice number patterns
-    const patterns = [
-      /Sales_25-26_PB_844/,
-      /FLPS\/[\d-]+/,
-      /Invoice\s*No[.:]?\s*([A-Za-z0-9\/-]+)/i,
-    ];
-
-    for (const pattern of patterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const invoiceNo = match[1] || match[0];
-        return {
-          answer: `Invoice Number: ${invoiceNo}`,
-          citations: [{ page: 1, text: `Invoice: ${invoiceNo}` }],
-        };
-      }
-    }
-
-    return { answer: "Invoice number not found.", citations: [] };
-  }
-
-  findCompany(text) {
-    console.log("Looking for company name...");
-
-    if (text.includes("DHN AGRITECH")) {
+    if (this.geminiApiKey.length < 35) {
       return {
-        answer: "Company: DHN AGRITECH PRIVATE LIMITED",
-        citations: [{ page: 1, text: "DHN AGRITECH PRIVATE LIMITED" }],
-      };
-    }
-
-    const lines = text.split("\n");
-    for (const line of lines) {
-      if (
-        line.includes("PRIVATE LIMITED") ||
-        line.includes("PVT") ||
-        line.includes("LTD")
-      ) {
-        return {
-          answer: `Company: ${line.trim()}`,
-          citations: [{ page: 1, text: line.trim() }],
-        };
-      }
-    }
-
-    return { answer: "Company name not clearly identified.", citations: [] };
-  }
-
-  findBillTo(text) {
-    console.log("Looking for bill to information...");
-
-    if (text.includes("Buyer (Bill to)")) {
-      const lines = text.split("\n");
-      const billToInfo = [];
-      let foundBillTo = false;
-
-      for (const line of lines) {
-        if (line.includes("Buyer") || line.includes("Bill to")) {
-          foundBillTo = true;
-          continue;
-        }
-        if (foundBillTo && line.trim().length > 5) {
-          billToInfo.push(line.trim());
-          if (billToInfo.length >= 3) break;
-        }
-      }
-
-      return {
-        answer: `Bill To: ${billToInfo.join(", ")}`,
-        citations: [{ page: 1, text: billToInfo.join(" ") }],
-      };
-    }
-
-    return { answer: "Bill to information not found.", citations: [] };
-  }
-
-  findAddress(text) {
-    console.log("Looking for address...");
-
-    const addressParts = [];
-    const lines = text.split("\n");
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (
-        trimmed.includes("Farm") ||
-        trimmed.includes("Road") ||
-        trimmed.includes("Sector") ||
-        trimmed.includes("Mohali") ||
-        trimmed.includes("Punjab") ||
-        /\d{6}/.test(trimmed)
-      ) {
-        addressParts.push(trimmed);
-      }
-    }
-
-    if (addressParts.length > 0) {
-      return {
-        answer: `Address: ${addressParts.join(", ")}`,
-        citations: [{ page: 1, text: addressParts.join(" ") }],
-      };
-    }
-
-    return { answer: "Address not clearly identified.", citations: [] };
-  }
-
-  findGSTIN(text) {
-    console.log("Looking for GSTIN...");
-
-    const gstinMatches = text.match(/\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z]\d/g);
-    if (gstinMatches) {
-      return {
-        answer: `GSTIN: ${gstinMatches.join(", ")}`,
-        citations: [{ page: 1, text: `GSTIN numbers found` }],
-      };
-    }
-
-    return { answer: "GSTIN not found.", citations: [] };
-  }
-
-  findAmount(text) {
-    console.log("Looking for amounts...");
-
-    const amounts = text.match(/₹[\d,]+\.?\d*|\d+\.?\d*\s*(?:Rs|INR)/g);
-    if (amounts) {
-      return {
-        answer: `Amounts found: ${amounts.join(", ")}`,
-        citations: [{ page: 1, text: `Amount information` }],
-      };
-    }
-
-    return { answer: "Amount not clearly identified.", citations: [] };
-  }
-
-  generalSearch(question, text) {
-    console.log("Performing general search...");
-
-    const questionWords = question
-      .toLowerCase()
-      .split(" ")
-      .filter((w) => w.length > 2);
-    const lines = text.split("\n").filter((line) => line.trim().length > 5);
-
-    let bestMatch = "";
-    let bestScore = 0;
-
-    for (const line of lines) {
-      const lineLower = line.toLowerCase();
-      const score = questionWords.reduce((acc, word) => {
-        return acc + (lineLower.includes(word) ? 1 : 0);
-      }, 0);
-
-      if (score > bestScore && line.trim().length > 10) {
-        bestScore = score;
-        bestMatch = line.trim();
-      }
-    }
-
-    if (bestMatch) {
-      return {
-        answer: `Found: ${bestMatch}`,
-        citations: [{ page: 1, text: bestMatch }],
+        valid: false,
+        message: "API key too short",
       };
     }
 
     return {
-      answer: `Information about "${question}" not specifically found in this document.`,
-      citations: [],
+      valid: true,
+      message: "API key format appears valid",
+    };
+  }
+
+  getStatus() {
+    const keyValidation = this.validateApiKey();
+
+    return {
+      provider: this.provider,
+      apiKeyConfigured: !!this.geminiApiKey,
+      apiKeyValid: keyValidation.valid,
+      apiKeyMessage: keyValidation.message,
+      ready: keyValidation.valid,
     };
   }
 }

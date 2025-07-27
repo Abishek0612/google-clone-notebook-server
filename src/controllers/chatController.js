@@ -6,30 +6,23 @@ const pdfService = require("../services/pdfService");
 exports.sendMessage = async (req, res) => {
   try {
     const { pdfId, message } = req.body;
-    console.log("=== Chat Controller Debug ===");
-    console.log("PDF ID:", pdfId);
-    console.log("Message:", message);
 
     if (!pdfId || !message) {
       return res.status(400).json({ error: "PDF ID and message are required" });
     }
 
+    console.log(`Processing message for PDF ${pdfId}: ${message}`);
+
     const pdf = await PDF.findById(pdfId);
     if (!pdf) {
-      console.log("PDF not found in database");
       return res.status(404).json({ error: "PDF not found" });
     }
 
-    console.log("Found PDF:", pdf.originalName);
-    console.log("PDF content length:", pdf.content ? pdf.content.length : 0);
-    console.log("PDF chunks count:", pdf.chunks ? pdf.chunks.length : 0);
-    console.log(
-      "PDF content preview:",
-      pdf.content ? pdf.content.substring(0, 200) : "No content"
+    const relevantChunks = await pdfService.findRelevantChunks(
+      pdf.chunks,
+      message
     );
-
-    const relevantChunks = pdfService.findRelevantChunks(pdf.chunks, message);
-    console.log("Relevant chunks found:", relevantChunks.length);
+    console.log(`Found ${relevantChunks.length} relevant chunks`);
 
     let conversation = await Conversation.findOne({ pdfId });
     if (!conversation) {
@@ -47,6 +40,8 @@ exports.sendMessage = async (req, res) => {
       relevantChunks
     );
 
+    console.log(`AI Response: ${aiResponse.answer.substring(0, 100)}...`);
+
     conversation.messages.push({
       role: "assistant",
       content: aiResponse.answer,
@@ -62,7 +57,11 @@ exports.sendMessage = async (req, res) => {
     });
   } catch (error) {
     console.error("Chat error:", error);
-    res.status(500).json({ error: "Failed to process message" });
+    res.status(500).json({
+      error: "Failed to process message",
+      details:
+        process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
   }
 };
 

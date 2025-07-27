@@ -4,36 +4,29 @@ const pdfController = require("../controllers/pdfController");
 
 const router = express.Router();
 
-router.options("/:id", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-  res.setHeader(
+router.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header(
     "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Range"
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, Range"
   );
-  res.status(200).end();
+  res.header(
+    "Access-Control-Expose-Headers",
+    "Content-Length, Content-Range, Accept-Ranges"
+  );
+
+  if (req.method === "OPTIONS") {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
 });
 
+// PDF routes
 router.post("/upload", upload.single("pdf"), pdfController.uploadPDF);
 router.get("/", pdfController.getPDFs);
 router.get("/:id", pdfController.getPDF);
 router.delete("/:id", pdfController.deletePDF);
-
-// Add clear all endpoint for debugging
-router.delete("/clear/all", async (req, res) => {
-  try {
-    const PDF = require("../models/PDF");
-    const Conversation = require("../models/Conversation");
-
-    await PDF.deleteMany({});
-    await Conversation.deleteMany({});
-
-    console.log("All PDFs and conversations cleared");
-    res.json({ message: "All data cleared successfully" });
-  } catch (error) {
-    console.error("Clear error:", error);
-    res.status(500).json({ error: "Failed to clear data" });
-  }
-});
 
 module.exports = router;
