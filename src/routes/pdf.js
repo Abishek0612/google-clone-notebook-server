@@ -23,12 +23,12 @@ router.use((req, res, next) => {
   }
 });
 
-router.post("/upload", upload.single("pdf"), pdfController.uploadPDF);
-router.get("/", pdfController.getPDFs);
-router.get("/:id", pdfController.getPDF);
-router.get("/:id/embedding-status", pdfController.getEmbeddingStatus);
-router.get("/:id/repair", pdfController.repairPDF);
-router.post("/:id/reprocess-embeddings", pdfController.reprocessEmbeddings);
-router.delete("/:id", pdfController.deletePDF);
+router.post("/pdf/upload", upload.single("pdf"), pdfController.uploadPDF);
+router.get("/pdfs", pdfController.getPDFs);
+router.get("/pdf/:id", pdfController.getPDF);
+router.get("/pdf/:id/embedding-status", pdfController.getEmbeddingStatus);
+router.get("/pdf/:id/repair", pdfController.repairPDF);
+router.post("/pdf/:id/reprocess-embeddings", pdfController.reprocessEmbeddings);
+router.delete("/pdf/:id", pdfController.deletePDF);
 
 module.exports = router;
