@@ -20,6 +20,11 @@ router.use((req, res, next) => {
 
 router.post("/message", chatController.sendMessage);
 router.get("/conversation/:pdfId", chatController.getConversation);
+router.delete(
+  "/conversation/:pdfId/message/:messageId",
+  chatController.deleteMessage
+);
+router.delete("/conversation/:pdfId/clear", chatController.clearConversation);
 router.post("/search-similar", chatController.searchSimilar);
 
 module.exports = router;

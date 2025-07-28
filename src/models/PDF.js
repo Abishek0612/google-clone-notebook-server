@@ -45,6 +45,9 @@ const pdfSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  embeddingError: {
+    type: String,
+  },
   uploadedAt: {
     type: Date,
     default: Date.now,
@@ -52,6 +55,7 @@ const pdfSchema = new mongoose.Schema({
 });
 
 pdfSchema.index({ content: "text" });
-pdfSchema.index({ "chunks.embedding": "2dsphere" });
+pdfSchema.index({ uploadedAt: -1 });
+pdfSchema.index({ embeddingStatus: 1 });
 
 module.exports = mongoose.model("PDF", pdfSchema);

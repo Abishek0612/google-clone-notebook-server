@@ -20,13 +20,17 @@ class AIService {
         throw new Error("Gemini API key not configured");
       }
 
-      const contextText = this.prepareContext(relevantChunks, context);
+      const contextText = this.prepareContext(
+        relevantChunks,
+        context,
+        question
+      );
 
       if (!contextText || contextText.trim().length === 0) {
         throw new Error("No content available to analyze");
       }
 
-      const response = await this.callGeminiAPI(question, contextText);
+      const response = await this.callGeminiAPIWithRetry(question, contextText);
       const citations = this.extractCitations(relevantChunks);
 
       return {
@@ -38,7 +42,7 @@ class AIService {
     }
   }
 
-  prepareContext(relevantChunks, fullContext) {
+  prepareContext(relevantChunks, fullContext, question) {
     let contextText = "";
 
     if (
@@ -57,38 +61,108 @@ class AIService {
           );
         });
 
-      if (validChunks.length === 0) {
-        contextText = fullContext || "";
-      } else {
+      if (validChunks.length > 0) {
         contextText = validChunks
           .map((chunkData) => chunkData.text.trim())
           .join("\n\n");
+      } else if (fullContext && typeof fullContext === "string") {
+        contextText = this.smartContextExtraction(fullContext, question);
+      } else {
+        throw new Error("No valid content found in chunks or full context");
       }
     } else if (fullContext && typeof fullContext === "string") {
-      contextText = fullContext;
+      contextText = this.smartContextExtraction(fullContext, question);
     } else {
-      throw new Error("No context available");
+      throw new Error(
+        "No context available - neither chunks nor full context provided"
+      );
     }
 
     if (!contextText || contextText.trim().length === 0) {
-      throw new Error("Prepared context is empty");
-    }
-
-    const maxContextLength = 25000;
-
-    if (contextText.length > maxContextLength) {
-      const firstPart = contextText.substring(
-        0,
-        Math.floor(maxContextLength * 0.7)
-      );
-      const lastPart = contextText.substring(
-        contextText.length - Math.floor(maxContextLength * 0.3)
-      );
-      contextText =
-        firstPart + "\n\n[... content truncated ...]\n\n" + lastPart;
+      throw new Error("Prepared context is empty after processing");
     }
 
     return contextText;
+  }
+
+  smartContextExtraction(fullContext, question) {
+    const questionWords = question
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+    const contextLength = fullContext.length;
+
+    if (contextLength <= 8000) {
+      return fullContext;
+    }
+
+    const sections = this.findRelevantSections(fullContext, questionWords);
+
+    if (sections.length > 0) {
+      const combinedSections = sections.join("\n\n");
+      if (combinedSections.length <= 8000) {
+        return combinedSections;
+      }
+    }
+
+    const chunkSize = Math.floor(8000 / 3);
+    const start = fullContext.substring(0, chunkSize);
+    const middle = this.findBestMiddleSection(
+      fullContext,
+      questionWords,
+      chunkSize
+    );
+    const end = fullContext.substring(contextLength - chunkSize);
+
+    return start + "\n\n" + middle + "\n\n" + end;
+  }
+
+  findRelevantSections(text, questionWords) {
+    const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 20);
+    const scoredSentences = sentences.map((sentence) => {
+      const sentenceLower = sentence.toLowerCase();
+      const score = questionWords.reduce((acc, word) => {
+        return acc + (sentenceLower.includes(word) ? word.length : 0);
+      }, 0);
+      return { sentence: sentence.trim(), score };
+    });
+
+    return scoredSentences
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map((item) => item.sentence);
+  }
+
+  findBestMiddleSection(text, questionWords, maxLength) {
+    const middleStart = Math.floor(text.length * 0.3);
+    const middleEnd = Math.floor(text.length * 0.7);
+    const middleSection = text.substring(middleStart, middleEnd);
+
+    const sentences = middleSection
+      .split(/[.!?]+/)
+      .filter((s) => s.trim().length > 20);
+    const scoredSentences = sentences.map((sentence) => {
+      const sentenceLower = sentence.toLowerCase();
+      const score = questionWords.reduce((acc, word) => {
+        return acc + (sentenceLower.includes(word) ? word.length * 2 : 0);
+      }, 0);
+      return { sentence: sentence.trim(), score };
+    });
+
+    let selectedSentences = [];
+    let currentLength = 0;
+
+    for (const item of scoredSentences.sort((a, b) => b.score - a.score)) {
+      if (currentLength + item.sentence.length <= maxLength) {
+        selectedSentences.push(item.sentence);
+        currentLength += item.sentence.length;
+      }
+    }
+
+    return selectedSentences.length > 0
+      ? selectedSentences.join(". ")
+      : middleSection.substring(0, maxLength);
   }
 
   extractChunkData(chunk) {
@@ -151,12 +225,87 @@ class AIService {
     return null;
   }
 
-  async callGeminiAPI(question, context) {
-    if (!this.geminiApiKey || !this.geminiApiKey.startsWith("AIza")) {
-      throw new Error("Invalid Gemini API key");
+  async callGeminiAPIWithRetry(question, context) {
+    const modelsToTry = [
+      "gemini-2.0-flash",
+      "gemini-2.5-flash",
+      "gemini-2.5-pro",
+    ];
+
+    let lastError = null;
+
+    for (const modelName of modelsToTry) {
+      try {
+        const response = await this.callGeminiAPI(question, context, modelName);
+        return response;
+      } catch (error) {
+        lastError = error;
+
+        if (error.response?.status === 503) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+
+        if (error.response?.status === 429) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          continue;
+        }
+
+        if (error.response?.status === 400 || error.response?.status === 404) {
+          continue;
+        }
+
+        break;
+      }
     }
 
-    const prompt = this.buildPrompt(question, context);
+    if (lastError.response) {
+      const status = lastError.response.status;
+      if (status === 503) {
+        throw new Error(
+          "AI service is temporarily unavailable. Please try again in a few moments."
+        );
+      } else if (status === 429) {
+        throw new Error(
+          "AI service rate limit exceeded. Please wait a moment and try again."
+        );
+      } else if (status === 413) {
+        throw new Error(
+          "Document is too large to process. Please try with a smaller document."
+        );
+      } else if (status === 400) {
+        const errorData = lastError.response.data;
+        throw new Error(
+          `Invalid request: ${
+            errorData.error?.message || "Please try rephrasing your question"
+          }`
+        );
+      } else if (status === 403) {
+        throw new Error(
+          "AI service access denied. Please check your API configuration."
+        );
+      } else if (status === 404) {
+        throw new Error(
+          "The AI models are currently unavailable. This may be due to API changes or regional restrictions."
+        );
+      } else {
+        throw new Error(
+          `AI service error (${status}). Please try again later.`
+        );
+      }
+    } else {
+      throw new Error(
+        "AI service connection failed. Please check your internet connection and try again."
+      );
+    }
+  }
+
+  async callGeminiAPI(question, context, modelName) {
+    if (!this.geminiApiKey || !this.geminiApiKey.startsWith("AIza")) {
+      throw new Error("Invalid Gemini API key configuration");
+    }
+
+    const prompt = `Document content:\n${context}\n\nQuestion: ${question}\n\nAnswer based only on the document:`;
 
     const requestBody = {
       contents: [
@@ -169,10 +318,10 @@ class AIService {
         },
       ],
       generationConfig: {
-        temperature: 0.2,
-        topK: 40,
-        topP: 0.8,
-        maxOutputTokens: 2048,
+        temperature: 0.1,
+        topK: 16,
+        topP: 0.9,
+        maxOutputTokens: 1024,
         candidateCount: 1,
       },
       safetySettings: [
@@ -195,132 +344,56 @@ class AIService {
       ],
     };
 
-    const modelsToTry = [
-      "gemini-1.5-flash",
-      "gemini-1.5-pro",
-      "gemini-pro",
-      "models/gemini-1.5-flash",
-      "models/gemini-1.5-pro",
-    ];
-
-    let lastError = null;
-
-    for (const modelName of modelsToTry) {
-      try {
-        const response = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${this.geminiApiKey}`,
-          requestBody,
-          {
-            headers: {
-              "Content-Type": "application/json",
-            },
-            timeout: 60000,
-          }
-        );
-
-        if (!response.data) {
-          throw new Error("Empty response from Gemini API");
-        }
-
-        if (
-          !response.data.candidates ||
-          response.data.candidates.length === 0
-        ) {
-          if (response.data.promptFeedback) {
-            const feedback = response.data.promptFeedback;
-            if (feedback.blockReason) {
-              throw new Error(
-                `Gemini API blocked request: ${feedback.blockReason}`
-              );
-            }
-          }
-          throw new Error("No candidates in Gemini API response");
-        }
-
-        const candidate = response.data.candidates[0];
-
-        if (candidate.finishReason === "SAFETY") {
-          throw new Error("Response blocked by Gemini safety filters");
-        }
-
-        if (candidate.finishReason === "RECITATION") {
-          throw new Error("Response blocked due to recitation concerns");
-        }
-
-        if (
-          !candidate.content ||
-          !candidate.content.parts ||
-          candidate.content.parts.length === 0
-        ) {
-          throw new Error("Invalid content structure in Gemini API response");
-        }
-
-        const generatedText = candidate.content.parts[0].text;
-
-        if (!generatedText || generatedText.trim().length === 0) {
-          throw new Error("Empty text generated by Gemini API");
-        }
-
-        return generatedText.trim();
-      } catch (error) {
-        lastError = error;
-
-        if (error.response && error.response.status === 404) {
-          continue;
-        }
-        break;
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${this.geminiApiKey}`,
+      requestBody,
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        timeout: 30000,
       }
-    }
+    );
 
-    if (lastError.response) {
-      if (lastError.response.status === 400) {
-        const errorData = lastError.response.data;
-        if (errorData.error && errorData.error.message) {
-          throw new Error(`Gemini API Bad Request: ${errorData.error.message}`);
-        } else {
-          throw new Error(
-            `Gemini API Bad Request: ${JSON.stringify(errorData)}`
-          );
+    if (
+      !response.data ||
+      !response.data.candidates ||
+      response.data.candidates.length === 0
+    ) {
+      if (response.data.promptFeedback) {
+        const feedback = response.data.promptFeedback;
+        if (feedback.blockReason) {
+          throw new Error(`Request blocked: ${feedback.blockReason}`);
         }
-      } else if (lastError.response.status === 403) {
-        throw new Error("Gemini API access denied");
-      } else if (lastError.response.status === 429) {
-        throw new Error("Gemini API rate limit exceeded");
-      } else {
-        throw new Error(
-          `Gemini API error (${lastError.response.status}): ${lastError.response.statusText}`
-        );
       }
-    } else {
-      throw new Error(`All Gemini models failed: ${lastError.message}`);
-    }
-  }
-
-  buildPrompt(question, context) {
-    if (!question || typeof question !== "string") {
-      throw new Error("Invalid question provided");
+      throw new Error("No valid response generated by AI model");
     }
 
-    if (!context || typeof context !== "string") {
-      throw new Error("Invalid context provided");
+    const candidate = response.data.candidates[0];
+
+    if (candidate.finishReason === "SAFETY") {
+      throw new Error("Response blocked by safety filters");
     }
 
-    return `You are a helpful AI assistant that analyzes documents and answers questions based on the provided content.
+    if (candidate.finishReason === "RECITATION") {
+      throw new Error("Response blocked due to recitation concerns");
+    }
 
-DOCUMENT CONTENT:
-${context}
+    if (
+      !candidate.content ||
+      !candidate.content.parts ||
+      candidate.content.parts.length === 0
+    ) {
+      throw new Error("Invalid response structure from AI model");
+    }
 
-QUESTION: ${question}
+    const generatedText = candidate.content.parts[0].text;
 
-INSTRUCTIONS:
-- Answer the question based ONLY on the information provided in the document content above
-- Be specific, accurate, and detailed in your response
-- If the exact information is not available in the document, clearly state that
-- Quote relevant parts from the document when appropriate
-- Maintain a professional and helpful tone
-- Do not make assumptions or add information not present in the document
+    if (!generatedText || generatedText.trim().length === 0) {
+      throw new Error("Empty response generated by AI model");
+    }
 
-ANSWER:`;
+    return generatedText.trim();
   }
 
   extractCitations(relevantChunks) {
@@ -329,12 +402,7 @@ ANSWER:`;
       !Array.isArray(relevantChunks) ||
       relevantChunks.length === 0
     ) {
-      return [
-        {
-          page: 1,
-          text: "Document content...",
-        },
-      ];
+      return [];
     }
 
     return relevantChunks
@@ -343,22 +411,22 @@ ANSWER:`;
       .map((chunkData) => ({
         page: chunkData.page || 1,
         text:
-          chunkData.text.length > 120
-            ? chunkData.text.substring(0, 120) + "..."
+          chunkData.text.length > 150
+            ? chunkData.text.substring(0, 150) + "..."
             : chunkData.text,
       }));
   }
 
   async testConnection() {
     try {
-      const testResponse = await this.callGeminiAPI(
-        "What is artificial intelligence?",
-        "Artificial intelligence (AI) is a branch of computer science that aims to create intelligent machines that can perform tasks that typically require human intelligence."
+      const testResponse = await this.callGeminiAPIWithRetry(
+        "What is the main topic of this document?",
+        "This is a test document about artificial intelligence and machine learning technologies."
       );
 
       return {
         success: true,
-        message: "Gemini API is working correctly",
+        message: "API connection successful",
         response: testResponse,
       };
     } catch (error) {

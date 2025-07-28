@@ -27,7 +27,7 @@ class PDFService {
 
   chunkText(text, chunkSize = 800, overlap = 100) {
     if (!text || text.trim().length === 0) {
-      return [];
+      throw new Error("No text provided for chunking");
     }
 
     const chunks = [];
@@ -52,15 +52,19 @@ class PDFService {
           currentChunk.length + sentence.length + 2 > chunkSize &&
           currentChunk.length > 0
         ) {
-          const chunk = this.createChunk(
-            currentChunk.trim(),
-            currentPage,
-            chunkStartIndex,
-            totalCharacters,
-            chunks.length
-          );
-
-          chunks.push(chunk);
+          const chunkText = currentChunk.trim();
+          if (chunkText.length > 0) {
+            const chunk = this.createChunk(
+              chunkText,
+              currentPage,
+              chunkStartIndex,
+              totalCharacters,
+              chunks.length
+            );
+            if (chunk) {
+              chunks.push(chunk);
+            }
+          }
 
           const overlapText = this.createOverlap(currentChunk, overlap);
           currentChunk = overlapText + (overlapText ? " " : "") + sentence;
@@ -86,52 +90,68 @@ class PDFService {
         totalCharacters,
         chunks.length
       );
-      chunks.push(finalChunk);
+      if (finalChunk) {
+        chunks.push(finalChunk);
+      }
     }
 
-    return chunks;
+    const validatedChunks = chunks.filter((chunk) => {
+      if (
+        !chunk ||
+        !chunk.text ||
+        typeof chunk.text !== "string" ||
+        chunk.text.trim().length === 0
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    if (validatedChunks.length === 0) {
+      throw new Error("No valid chunks created from text");
+    }
+
+    return validatedChunks;
   }
 
   async findRelevantChunks(chunks, query, maxChunks = 5) {
     if (!chunks || chunks.length === 0) {
-      return [];
+      throw new Error("No chunks available for search");
     }
 
     if (!query || query.trim().length === 0) {
-      return chunks.slice(0, Math.min(maxChunks, 3));
+      throw new Error("Query is required for chunk search");
     }
 
-    try {
-      const aiService = require("./aiService");
-      if (
-        aiService &&
-        typeof aiService.findSemanticallySimilarChunks === "function"
-      ) {
-        const semanticChunks = await aiService.findSemanticallySimilarChunks(
-          chunks,
-          query,
-          maxChunks
-        );
+    const relevantChunks = this.findKeywordRelevantChunks(
+      chunks,
+      query,
+      maxChunks
+    );
+    const validChunks = relevantChunks.filter(
+      (chunk) => chunk.text && typeof chunk.text === "string"
+    );
 
-        if (semanticChunks && semanticChunks.length > 0) {
-          return semanticChunks;
-        }
-      }
-    } catch (error) {}
-
-    return this.findKeywordRelevantChunks(chunks, query, maxChunks);
+    return validChunks;
   }
 
   findKeywordRelevantChunks(chunks, query, maxChunks = 5) {
-    const queryKeywords = this.extractKeywords(query);
+    const queryWords = this.extractQueryWords(query);
 
-    if (queryKeywords.length === 0) {
-      return chunks.slice(0, Math.min(maxChunks, 3));
+    if (queryWords.length === 0) {
+      throw new Error("No meaningful words found in query");
     }
 
-    const scoredChunks = chunks.map((chunk, index) => {
-      const score = this.calculateRelevanceScore(chunk, queryKeywords, query);
+    const validChunks = chunks.filter(
+      (chunk) => chunk.text && typeof chunk.text === "string"
+    );
 
+    if (validChunks.length === 0) {
+      throw new Error("No valid text chunks available");
+    }
+
+    const scoredChunks = validChunks.map((chunk) => {
+      const score = this.calculateRelevanceScore(chunk, queryWords, query);
       return {
         ...chunk,
         relevanceScore: score.total,
@@ -140,24 +160,44 @@ class PDFService {
       };
     });
 
-    const relevantChunks = scoredChunks
-      .filter((chunk) => chunk.relevanceScore > 0.1)
+    let relevantChunks = scoredChunks
+      .filter((chunk) => chunk.relevanceScore > 0)
       .sort((a, b) => b.relevanceScore - a.relevanceScore)
       .slice(0, maxChunks);
 
     if (relevantChunks.length === 0) {
-      return chunks.slice(0, Math.min(3, chunks.length)).map((chunk) => ({
-        ...chunk,
-        relevanceScore: 0.05,
-        scoreDetails: { reason: "fallback_context" },
-        matchedKeywords: [],
-      }));
+      const allScores = scoredChunks
+        .map((c) => c.relevanceScore)
+        .sort((a, b) => b - a);
+      const dynamicThreshold =
+        allScores[Math.min(maxChunks - 1, allScores.length - 1)] || 0;
+
+      relevantChunks = scoredChunks
+        .filter((chunk) => chunk.relevanceScore >= dynamicThreshold)
+        .sort((a, b) => b.relevanceScore - a.relevanceScore)
+        .slice(0, maxChunks);
+    }
+
+    if (relevantChunks.length === 0) {
+      const partialMatches = scoredChunks
+        .filter((chunk) => {
+          const chunkTextLower = chunk.text.toLowerCase();
+          return queryWords.some((word) =>
+            chunkTextLower.includes(word.toLowerCase())
+          );
+        })
+        .sort((a, b) => b.relevanceScore - a.relevanceScore)
+        .slice(0, maxChunks);
+
+      if (partialMatches.length > 0) {
+        relevantChunks = partialMatches;
+      }
     }
 
     return relevantChunks;
   }
 
-  calculateRelevanceScore(chunk, queryKeywords, originalQuery) {
+  calculateRelevanceScore(chunk, queryWords, originalQuery) {
     if (!chunk || !chunk.text || typeof chunk.text !== "string") {
       return { total: 0, details: {}, matchedKeywords: [] };
     }
@@ -170,11 +210,11 @@ class PDFService {
     let partialMatches = 0;
     let matchedKeywords = [];
 
-    queryKeywords.forEach((keyword) => {
-      const keywordLower = keyword.toLowerCase();
+    queryWords.forEach((word) => {
+      const wordLower = word.toLowerCase();
 
       const exactMatchRegex = new RegExp(
-        `\\b${this.escapeRegex(keywordLower)}\\b`,
+        `\\b${this.escapeRegex(wordLower)}\\b`,
         "g"
       );
       const exactMatchCount = (chunkTextLower.match(exactMatchRegex) || [])
@@ -182,24 +222,22 @@ class PDFService {
 
       if (exactMatchCount > 0) {
         exactMatches += exactMatchCount;
-        matchedKeywords.push(keyword);
+        matchedKeywords.push(word);
+        let wordScore = exactMatchCount * 10;
 
-        let keywordScore = exactMatchCount * 10;
-
-        if (keyword.length > 5) {
-          keywordScore *= 1.5;
+        if (word.length > 3) {
+          wordScore *= 1.5;
         }
 
-        if (this.isTechnicalTerm(keyword)) {
-          keywordScore *= 2;
+        if (word.length > 6) {
+          wordScore *= 2;
         }
 
-        totalScore += keywordScore;
+        totalScore += wordScore;
       }
 
       const partialMatchCount = (
-        chunkTextLower.match(new RegExp(this.escapeRegex(keywordLower), "g")) ||
-        []
+        chunkTextLower.match(new RegExp(this.escapeRegex(wordLower), "g")) || []
       ).length;
       const additionalPartialMatches = Math.max(
         0,
@@ -208,20 +246,23 @@ class PDFService {
 
       if (additionalPartialMatches > 0) {
         partialMatches += additionalPartialMatches;
-        totalScore += additionalPartialMatches * 2;
+        totalScore += additionalPartialMatches * 3;
+      }
+
+      if (chunkTextLower.includes(wordLower)) {
+        totalScore += 2;
       }
     });
 
-    const uniqueKeywordMatches = matchedKeywords.length;
-    if (uniqueKeywordMatches > 1) {
-      totalScore *= 1 + uniqueKeywordMatches * 0.2;
+    if (matchedKeywords.length > 1) {
+      totalScore *= 1 + matchedKeywords.length * 0.3;
     }
 
     if (
-      originalQueryLower.length > 10 &&
+      originalQueryLower.length > 3 &&
       chunkTextLower.includes(originalQueryLower)
     ) {
-      totalScore *= 1.5;
+      totalScore *= 3;
     }
 
     const normalizedScore = totalScore / Math.sqrt(chunk.text.length / 100);
@@ -231,197 +272,20 @@ class PDFService {
       details: {
         exactMatches,
         partialMatches,
-        uniqueWords: uniqueKeywordMatches,
+        uniqueWords: matchedKeywords.length,
         chunkLength: chunk.text.length,
       },
       matchedKeywords,
     };
   }
 
-  extractKeywords(query) {
-    const stopWords = new Set([
-      "the",
-      "a",
-      "an",
-      "and",
-      "or",
-      "but",
-      "in",
-      "on",
-      "at",
-      "to",
-      "for",
-      "of",
-      "with",
-      "by",
-      "is",
-      "are",
-      "was",
-      "were",
-      "be",
-      "been",
-      "being",
-      "have",
-      "has",
-      "had",
-      "do",
-      "does",
-      "did",
-      "will",
-      "would",
-      "could",
-      "should",
-      "may",
-      "might",
-      "can",
-      "what",
-      "how",
-      "why",
-      "when",
-      "where",
-      "this",
-      "that",
-      "these",
-      "those",
-      "from",
-      "into",
-      "about",
-      "give",
-      "brief",
-      "tell",
-      "show",
-      "me",
-      "please",
-      "you",
-      "your",
-      "my",
-      "i",
-      "we",
-      "they",
-      "them",
-      "their",
-      "there",
-      "here",
-    ]);
-
-    const keywords = query
+  extractQueryWords(query) {
+    return query
       .toLowerCase()
       .replace(/[^\w\s]/g, " ")
       .split(/\s+/)
-      .filter((word) => {
-        return (
-          word.length > 2 &&
-          !stopWords.has(word) &&
-          /^[a-zA-Z]+$/.test(word) &&
-          !word.match(/^(what|how|why|when|where)$/)
-        );
-      })
+      .filter((word) => word.length > 0)
       .filter((word, index, array) => array.indexOf(word) === index);
-
-    return keywords;
-  }
-
-  isTechnicalTerm(word) {
-    const technicalTerms = new Set([
-      "name",
-      "candidate",
-      "experience",
-      "education",
-      "skills",
-      "technologies",
-      "projects",
-      "developer",
-      "engineer",
-      "programmer",
-      "analyst",
-      "manager",
-      "intern",
-      "consultant",
-      "senior",
-      "junior",
-      "lead",
-      "architect",
-      "designer",
-      "specialist",
-      "javascript",
-      "typescript",
-      "python",
-      "java",
-      "cpp",
-      "csharp",
-      "php",
-      "ruby",
-      "go",
-      "rust",
-      "swift",
-      "kotlin",
-      "scala",
-      "perl",
-      "shell",
-      "bash",
-      "react",
-      "angular",
-      "vue",
-      "nodejs",
-      "express",
-      "django",
-      "flask",
-      "spring",
-      "laravel",
-      "rails",
-      "jquery",
-      "bootstrap",
-      "tailwind",
-      "sass",
-      "scss",
-      "html",
-      "css",
-      "sql",
-      "nosql",
-      "mongodb",
-      "mysql",
-      "postgresql",
-      "redis",
-      "elasticsearch",
-      "docker",
-      "kubernetes",
-      "aws",
-      "azure",
-      "gcp",
-      "jenkins",
-      "git",
-      "github",
-      "gitlab",
-      "university",
-      "college",
-      "institute",
-      "degree",
-      "bachelor",
-      "master",
-      "phd",
-      "certification",
-      "diploma",
-      "course",
-      "training",
-      "workshop",
-      "seminar",
-      "company",
-      "organization",
-      "corporation",
-      "startup",
-      "enterprise",
-      "agency",
-      "firm",
-      "department",
-      "team",
-      "project",
-      "product",
-      "service",
-      "client",
-      "customer",
-    ]);
-
-    return technicalTerms.has(word.toLowerCase());
   }
 
   escapeRegex(string) {
@@ -466,18 +330,26 @@ class PDFService {
   }
 
   createChunk(text, page, startIndex, endIndex, chunkIndex) {
-    const words = text.split(" ");
-    const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+    const chunkText = text && typeof text === "string" ? text.trim() : "";
+
+    if (chunkText.length === 0) {
+      return null;
+    }
+
+    const words = chunkText.split(" ");
+    const sentences = chunkText
+      .split(/[.!?]+/)
+      .filter((s) => s.trim().length > 0);
 
     return {
-      text: text,
-      page: page,
-      startIndex: startIndex,
-      endIndex: endIndex,
-      chunkIndex: chunkIndex,
+      text: chunkText,
+      page: page || 1,
+      startIndex: startIndex || 0,
+      endIndex: endIndex || chunkText.length,
+      chunkIndex: chunkIndex || 0,
       wordCount: words.length,
       sentenceCount: sentences.length,
-      characterCount: text.length,
+      characterCount: chunkText.length,
       createdAt: new Date().toISOString(),
     };
   }
@@ -492,22 +364,47 @@ class PDFService {
       };
     }
 
-    const totalCharacters = chunks.reduce(
-      (sum, chunk) => sum + chunk.characterCount,
+    const validChunks = chunks.filter(
+      (chunk) => chunk.text && typeof chunk.text === "string"
+    );
+
+    const totalCharacters = validChunks.reduce(
+      (sum, chunk) => sum + (chunk.characterCount || chunk.text.length || 0),
       0
     );
-    const totalWords = chunks.reduce((sum, chunk) => sum + chunk.wordCount, 0);
+    const totalWords = validChunks.reduce(
+      (sum, chunk) =>
+        sum + (chunk.wordCount || chunk.text.split(" ").length || 0),
+      0
+    );
 
     return {
-      totalChunks: chunks.length,
+      totalChunks: validChunks.length,
       totalCharacters: totalCharacters,
       totalWords: totalWords,
-      averageChunkSize: Math.round(totalCharacters / chunks.length),
-      averageWordsPerChunk: Math.round(totalWords / chunks.length),
-      sizeRange: {
-        min: Math.min(...chunks.map((c) => c.characterCount)),
-        max: Math.max(...chunks.map((c) => c.characterCount)),
-      },
+      averageChunkSize:
+        validChunks.length > 0
+          ? Math.round(totalCharacters / validChunks.length)
+          : 0,
+      averageWordsPerChunk:
+        validChunks.length > 0
+          ? Math.round(totalWords / validChunks.length)
+          : 0,
+      sizeRange:
+        validChunks.length > 0
+          ? {
+              min: Math.min(
+                ...validChunks.map(
+                  (c) => c.characterCount || c.text.length || 0
+                )
+              ),
+              max: Math.max(
+                ...validChunks.map(
+                  (c) => c.characterCount || c.text.length || 0
+                )
+              ),
+            }
+          : { min: 0, max: 0 },
     };
   }
 }

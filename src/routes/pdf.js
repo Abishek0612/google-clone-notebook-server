@@ -27,6 +27,7 @@ router.post("/upload", upload.single("pdf"), pdfController.uploadPDF);
 router.get("/", pdfController.getPDFs);
 router.get("/:id", pdfController.getPDF);
 router.get("/:id/embedding-status", pdfController.getEmbeddingStatus);
+router.get("/:id/repair", pdfController.repairPDF);
 router.post("/:id/reprocess-embeddings", pdfController.reprocessEmbeddings);
 router.delete("/:id", pdfController.deletePDF);
 

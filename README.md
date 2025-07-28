@@ -1,2 +1,60 @@
-# google-clone-notebook-server
-Developing a ecommerce website using Node.js with express.js and for database using mongodb
+# NotebookLM Clone - Backend
+
+A sophisticated Node.js backend application that powers an AI-powered document chat system, enabling users to upload PDFs and engage in intelligent conversations about their content using advanced vector search and natural language processing.
+
+## Advanced Features
+
+### Core AI & Search Capabilities
+
+- **Hybrid Vector Search**: Advanced semantic search using Google's Gemini API embeddings
+- **Intelligent Document Processing**: Advanced PDF text extraction and chunking algorithms optimized for AI analysis
+- **Dynamic Context Management**: Smart context preparation with content truncation and relevance scoring
+- **Real-time Embedding Generation**: Asynchronous processing with progress tracking and status updates
+
+### Architecture & Performance
+
+- **Microservices Design**: Modular architecture with separated concerns (AI, Vector, PDF, Chat services)
+- **Advanced Error Handling**: Comprehensive error management with detailed logging and user-friendly messages
+- **Rate Limiting & Security**: Express rate limiting, CORS configuration, and Helmet security middleware
+- **Database Optimization**: MongoDB with strategic indexing and efficient data modeling
+- **Performance Optimization**: Smart context extraction and intelligent caching mechanisms
+
+### API & Integration
+
+- **RESTful API Design**: Well-structured endpoints following REST principles
+- **Real-time Status Updates**: Embedding progress tracking with detailed status information
+- **File Management**: Secure file upload handling with validation and cleanup
+- **Cross-Origin Support**: Advanced CORS configuration for seamless frontend integration
+
+## Technology Stack
+
+- **Runtime**: Node.js with Express.js framework
+- **Database**: MongoDB with Mongoose ODM
+- **AI Integration**: Google Gemini API for embeddings and chat completions
+- **File Processing**: PDF-parse for document text extraction
+- **Security**: Helmet, CORS, Rate limiting middleware
+- **Development**: Hot reloading, comprehensive logging, environment-based configuration
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js (v16 or higher)
+- MongoDB (local or cloud instance)
+- Google Gemini API key
+
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone     -       https://github.com/Abishek0612/google-clone-notebook-server.git
+   cd  server
+   ```
+
+### Install dependencies ( node_modules is deleted)
+
+npm install
+
+### Start the server
+
+npm start
