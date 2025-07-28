@@ -66,17 +66,20 @@ app.get("/health", (req, res) => {
 
 // API Routes
 try {
-  const pdfRoutes = require("./src/routes/pdfRoutes");
-  const chatRoutes = require("./src/routes/chatRoutes");
+  const pdfRoutes = require("./src/routes/pdf");
+  const chatRoutes = require("./src/routes/chat");
 
   app.use("/api", pdfRoutes);
   app.use("/api", chatRoutes);
+
+  console.log(" Routes loaded successfully");
 } catch (error) {
-  console.error("Error loading routes:", error.message);
-  app.use("/api", (req, res) => {
+  console.error(" Error loading routes:", error.message);
+  app.use("/api/*", (req, res) => {
     res.status(500).json({
       error: "Routes not properly configured",
-      message: "Please check route files exist",
+      message: error.message,
+      path: req.path,
     });
   });
 }
@@ -125,9 +128,7 @@ const startServer = async () => {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(` Server running on port ${PORT}`);
     console.log(` Environment: ${process.env.NODE_ENV || "development"}`);
-    console.log(
-      ` MongoDB: ${process.env.MONGODB_URI ? "Connected" : "Not configured"}`
-    );
+    console.log(` MongoDB: Connected`);
   });
 };
 
