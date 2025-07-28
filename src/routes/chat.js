@@ -20,5 +20,6 @@ router.use((req, res, next) => {
 
 router.post("/message", chatController.sendMessage);
 router.get("/conversation/:pdfId", chatController.getConversation);
+router.post("/search-similar", chatController.searchSimilar);
 
 module.exports = router;

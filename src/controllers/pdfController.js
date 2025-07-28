@@ -1,5 +1,6 @@
 const PDF = require("../models/PDF");
 const pdfService = require("../services/pdfService");
+const vectorService = require("../services/vectorService");
 const fsPromises = require("fs").promises;
 const fs = require("fs");
 const path = require("path");
@@ -32,10 +33,13 @@ exports.uploadPDF = async (req, res) => {
       pageCount: extractedData.pageCount,
       content: extractedData.text,
       chunks,
+      embeddingStatus: "pending",
     });
 
     await pdf.save();
     console.log("PDF saved to database with ID:", pdf._id);
+
+    processEmbeddingsAsync(pdf._id);
 
     res.status(201).json({
       id: pdf._id,
@@ -43,6 +47,7 @@ exports.uploadPDF = async (req, res) => {
       pageCount: pdf.pageCount,
       size: pdf.size,
       uploadedAt: pdf.uploadedAt,
+      embeddingStatus: pdf.embeddingStatus,
     });
   } catch (error) {
     console.error("Upload error:", error);
@@ -53,16 +58,100 @@ exports.uploadPDF = async (req, res) => {
   }
 };
 
+async function processEmbeddingsAsync(pdfId) {
+  try {
+    const pdf = await PDF.findById(pdfId);
+    if (!pdf) return;
+
+    pdf.embeddingStatus = "processing";
+    await pdf.save();
+
+    const chunkTexts = pdf.chunks.map((chunk) => chunk.text);
+    const embeddings = await vectorService.generateEmbeddings(chunkTexts);
+
+    for (let i = 0; i < pdf.chunks.length; i++) {
+      pdf.chunks[i].embedding = embeddings[i];
+      pdf.chunks[i].embeddingModel = "embedding-001";
+      pdf.embeddingProgress = Math.round(((i + 1) / pdf.chunks.length) * 100);
+
+      if (i % 5 === 0) {
+        await pdf.save();
+      }
+    }
+
+    pdf.embeddingStatus = "completed";
+    pdf.embeddingProgress = 100;
+    await pdf.save();
+
+    console.log(`Embeddings completed for PDF ${pdfId}`);
+  } catch (error) {
+    console.error(`Embedding processing failed for PDF ${pdfId}:`, error);
+
+    try {
+      const pdf = await PDF.findById(pdfId);
+      if (pdf) {
+        pdf.embeddingStatus = "failed";
+        await pdf.save();
+      }
+    } catch (updateError) {
+      console.error("Failed to update embedding status:", updateError);
+    }
+  }
+}
+
 exports.getPDFs = async (req, res) => {
   try {
     const pdfs = await PDF.find()
-      .select("_id originalName pageCount size uploadedAt")
+      .select(
+        "_id originalName pageCount size uploadedAt embeddingStatus embeddingProgress"
+      )
       .sort({ uploadedAt: -1 });
 
     res.json(pdfs);
   } catch (error) {
     console.error("Get PDFs error:", error);
     res.status(500).json({ error: "Failed to fetch PDFs" });
+  }
+};
+
+exports.getEmbeddingStatus = async (req, res) => {
+  try {
+    const pdf = await PDF.findById(req.params.id).select(
+      "embeddingStatus embeddingProgress"
+    );
+
+    if (!pdf) {
+      return res.status(404).json({ error: "PDF not found" });
+    }
+
+    res.json({
+      status: pdf.embeddingStatus,
+      progress: pdf.embeddingProgress,
+    });
+  } catch (error) {
+    console.error("Get embedding status error:", error);
+    res.status(500).json({ error: "Failed to get embedding status" });
+  }
+};
+
+exports.reprocessEmbeddings = async (req, res) => {
+  try {
+    const pdf = await PDF.findById(req.params.id);
+
+    if (!pdf) {
+      return res.status(404).json({ error: "PDF not found" });
+    }
+
+    pdf.embeddingStatus = "pending";
+    pdf.embeddingProgress = 0;
+    await pdf.save();
+
+    processEmbeddingsAsync(pdf._id);
+
+    res.json({ message: "Embedding reprocessing started" });
+  } catch (error) {
+    console.error("Reprocess embeddings error:", error);
+    res.status(500).json({ error: "Failed to reprocess embeddings" });
   }
 };
 
