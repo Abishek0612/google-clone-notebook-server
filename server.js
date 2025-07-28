@@ -7,11 +7,12 @@ require("dotenv").config();
 
 const app = express();
 
+// Trust proxy for cloud deployment
 app.set("trust proxy", 1);
 
-// Rate limiting configuration for production
+// Rate limiting configuration
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 100,
   message: "Too many requests from this IP, please try again later.",
   trustProxy: true,
@@ -20,7 +21,7 @@ const limiter = rateLimit({
   },
 });
 
-// CORS configuration for production
+// CORS configuration
 const corsOptions = {
   origin: [
     "http://localhost:3000",
@@ -45,6 +46,7 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 app.use(limiter);
 
+// Health check routes
 app.get("/", (req, res) => {
   res.status(200).json({
     message: "NotebookLM Clone Backend API is running!",
@@ -63,9 +65,23 @@ app.get("/health", (req, res) => {
 });
 
 // API Routes
-app.use("/api", require("./src/routes/pdfRoutes"));
-app.use("/api", require("./src/routes/chatRoutes"));
+try {
+  const pdfRoutes = require("./src/routes/pdfRoutes");
+  const chatRoutes = require("./src/routes/chatRoutes");
 
+  app.use("/api", pdfRoutes);
+  app.use("/api", chatRoutes);
+} catch (error) {
+  console.error("Error loading routes:", error.message);
+  app.use("/api", (req, res) => {
+    res.status(500).json({
+      error: "Routes not properly configured",
+      message: "Please check route files exist",
+    });
+  });
+}
+
+// 404 handler
 app.use("*", (req, res) => {
   res.status(404).json({
     error: "Route not found",
@@ -89,6 +105,10 @@ app.use((error, req, res, next) => {
 // MongoDB connection
 const connectDB = async () => {
   try {
+    if (!process.env.MONGODB_URI) {
+      throw new Error("MONGODB_URI environment variable is not set");
+    }
+
     const conn = await mongoose.connect(process.env.MONGODB_URI);
     console.log(` Connected to MongoDB: ${conn.connection.host}`);
   } catch (error) {
