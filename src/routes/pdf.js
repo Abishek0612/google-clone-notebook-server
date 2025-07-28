@@ -21,7 +21,7 @@ router.use((req, res, next) => {
   }
 });
 
-router.post("/upload", upload.single("pdf"), pdfController.uploadPDF);
+router.post("/pdf/upload", upload.single("pdf"), pdfController.uploadPDF);
 router.get("/pdfs", pdfController.getPDFs);
 
 router.get("/pdf", (req, res) => {
@@ -30,7 +30,7 @@ router.get("/pdf", (req, res) => {
     availableRoutes: [
       "GET /api/pdfs - Get all PDFs",
       "GET /api/pdf/:id - Get specific PDF",
-      "POST /api/upload - Upload PDF",
+      "POST /api/pdf/upload - Upload PDF",
       "DELETE /api/pdf/:id - Delete PDF",
     ],
   });
@@ -49,7 +49,7 @@ router.use("*", (req, res) => {
     availableRoutes: [
       "GET /api/pdfs",
       "GET /api/pdf/:id",
-      "POST /api/upload",
+      "POST /api/pdf/upload",
       "DELETE /api/pdf/:id",
     ],
   });
