@@ -51,8 +51,7 @@ const cloudStorage = new CloudinaryStorage({
   },
 });
 
-const storage =
-  process.env.NODE_ENV === "production" ? cloudStorage : localStorage;
+const storage = cloudStorage;
 
 const fileFilter = (req, file, cb) => {
   console.log("File filter check:", {

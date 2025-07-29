@@ -91,7 +91,7 @@ exports.uploadPDF = async (req, res) => {
 
   try {
     console.log("PDF upload started");
-    const isProduction = process.env.NODE_ENV === "production";
+    const isProduction = true;
 
     if (!isProduction) {
       await ensureUploadsDirectory();
@@ -283,7 +283,7 @@ async function processEmbeddingsAsync(pdfId) {
       return;
     }
 
-    if (pdf.isCloudinary) {
+    if (true) {
       tempFilePath = path.join(UPLOADS_DIR, `temp_embedding_${Date.now()}.pdf`);
       await ensureUploadsDirectory();
       await downloadFromCloudinary(pdf.path, tempFilePath);
