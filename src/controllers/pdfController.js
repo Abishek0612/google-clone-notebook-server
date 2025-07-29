@@ -66,8 +66,8 @@ exports.uploadPDF = async (req, res) => {
       return res.status(400).json({ error: "No PDF file uploaded" });
     }
 
-    const { originalname, size } = req.file;
-    const publicId = req.file.public_id;
+    const { originalname, size, filename } = req.file;
+    const publicId = req.file.public_id || filename;
     const cloudinaryUrl = req.file.path;
 
     console.log("File details:", {
