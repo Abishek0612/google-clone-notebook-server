@@ -1,5 +1,11 @@
 # NotebookLM Clone - Backend
 
+## Live Demo
+
+- **Frontend**: https://google-notebook-llm.netlify.app/
+
+- **Backend**: https://google-notebook-clone-server.onrender.com/api
+
 A sophisticated Node.js backend application that powers an AI-powered document chat system, enabling users to upload PDFs and engage in intelligent conversations about their content using advanced vector search and natural language processing.
 
 ## Advanced Features
