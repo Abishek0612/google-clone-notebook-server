@@ -18,37 +18,16 @@ const ensureUploadsDirectory = async () => {
   }
 };
 
-const validateFileExists = async (filePath, isCloudinary = false) => {
+const validateFileExists = async (filePath) => {
   try {
     if (!filePath) return false;
-
-    if (isCloudinary) {
-      try {
-        const result = await cloudinary.api.resource(filePath, {
-          resource_type: "raw",
-        });
-        return result && result.secure_url;
-      } catch (error) {
-        return false;
-      }
-    } else {
-      const fullPath = path.isAbsolute(filePath)
-        ? filePath
-        : path.join(UPLOADS_DIR, filePath);
-      await fsPromises.access(fullPath, fs.constants.F_OK);
-      const stats = await fsPromises.stat(fullPath);
-      return stats.isFile() && stats.size > 0;
-    }
+    const result = await cloudinary.api.resource(filePath, {
+      resource_type: "raw",
+    });
+    return result && result.secure_url;
   } catch (error) {
     return false;
   }
-};
-
-const getFullPath = (filePath) => {
-  if (!filePath) return null;
-  return path.isAbsolute(filePath)
-    ? filePath
-    : path.join(UPLOADS_DIR, filePath);
 };
 
 const downloadFromCloudinary = async (publicId, tempPath) => {
@@ -74,79 +53,35 @@ const downloadFromCloudinary = async (publicId, tempPath) => {
   }
 };
 
-const generateSecureFileName = (originalName) => {
-  const timestamp = Date.now();
-  const randomString = Math.random().toString(36).substring(2, 15);
-  const extension = path.extname(originalName);
-  const baseName = path
-    .basename(originalName, extension)
-    .replace(/[^a-zA-Z0-9]/g, "_");
-  return `${baseName}_${timestamp}_${randomString}${extension}`;
-};
-
 exports.uploadPDF = async (req, res) => {
-  let tempFilePath = null;
-  let savedPdf = null;
   let tempDownloadPath = null;
+  let savedPdf = null;
 
   try {
     console.log("PDF upload started");
-    const isProduction = true;
-
-    if (!isProduction) {
-      await ensureUploadsDirectory();
-    }
 
     if (!req.file) {
       return res.status(400).json({ error: "No PDF file uploaded" });
     }
 
-    const { filename, originalname, size } = req.file;
-    let finalPath, publicId, cloudinaryUrl;
+    const { originalname, size } = req.file;
+    const publicId = req.file.public_id;
+    const cloudinaryUrl = req.file.path;
 
-    if (isProduction) {
-      publicId = req.file.public_id;
-      cloudinaryUrl = req.file.path;
-      finalPath = publicId;
-
-      tempDownloadPath = path.join(UPLOADS_DIR, `temp_${Date.now()}.pdf`);
-      await ensureUploadsDirectory();
-      await downloadFromCloudinary(publicId, tempDownloadPath);
-      tempFilePath = tempDownloadPath;
-    } else {
-      tempFilePath = req.file.path;
-      const secureFileName = generateSecureFileName(originalname);
-      finalPath = path.join(UPLOADS_DIR, secureFileName);
-
-      try {
-        await fsPromises.copyFile(tempFilePath, finalPath);
-        console.log("File copied to secure location:", finalPath);
-
-        const finalFileExists = await validateFileExists(finalPath);
-        if (!finalFileExists) {
-          throw new Error("Failed to copy file to secure location");
-        }
-      } catch (copyError) {
-        console.error("File copy error:", copyError);
-        throw new Error("Failed to secure uploaded file");
-      }
-      finalPath = secureFileName;
-    }
+    tempDownloadPath = path.join(UPLOADS_DIR, `temp_${Date.now()}.pdf`);
+    await ensureUploadsDirectory();
+    await downloadFromCloudinary(publicId, tempDownloadPath);
 
     console.log("Processing file:", originalname, "Size:", size);
 
-    const extractedData = await pdfService.extractText(tempFilePath);
+    const extractedData = await pdfService.extractText(tempDownloadPath);
     console.log(
       "Text extraction completed. Length:",
       extractedData.text.length
     );
 
     if (!extractedData.text || extractedData.text.trim().length === 0) {
-      if (isProduction && publicId) {
-        await cloudinary.uploader.destroy(publicId, { resource_type: "raw" });
-      } else if (finalPath) {
-        await fsPromises.unlink(getFullPath(finalPath)).catch(console.error);
-      }
+      await cloudinary.uploader.destroy(publicId, { resource_type: "raw" });
       throw new Error("PDF contains no extractable text content");
     }
 
@@ -154,27 +89,20 @@ exports.uploadPDF = async (req, res) => {
     console.log("Created", chunks.length, "chunks");
 
     if (chunks.length === 0) {
-      if (isProduction && publicId) {
-        await cloudinary.uploader.destroy(publicId, { resource_type: "raw" });
-      } else if (finalPath) {
-        await fsPromises.unlink(getFullPath(finalPath)).catch(console.error);
-      }
+      await cloudinary.uploader.destroy(publicId, { resource_type: "raw" });
       throw new Error("Failed to create text chunks from PDF content");
     }
 
     const pdf = new PDF({
-      filename: isProduction ? publicId : filename,
+      filename: publicId,
       originalName: originalname,
-      path: finalPath,
-      cloudinaryUrl: isProduction ? cloudinaryUrl : null,
-      isCloudinary: isProduction,
+      path: publicId,
+      cloudinaryUrl: cloudinaryUrl,
+      isCloudinary: true,
       size,
       pageCount: extractedData.pageCount,
       content: extractedData.text,
-      chunks: chunks.map((chunk) => ({
-        ...chunk,
-        embedding: [],
-      })),
+      chunks: chunks.map((chunk) => ({ ...chunk, embedding: [] })),
       embeddingStatus: "pending",
       uploadedAt: new Date(),
     });
@@ -182,21 +110,9 @@ exports.uploadPDF = async (req, res) => {
     savedPdf = await pdf.save();
     console.log("PDF saved to database with ID:", savedPdf._id);
 
-    try {
-      if (tempDownloadPath) {
-        await fsPromises.unlink(tempDownloadPath);
-        console.log("Temporary download file cleaned up:", tempDownloadPath);
-      }
-      if (
-        !isProduction &&
-        tempFilePath &&
-        tempFilePath !== getFullPath(finalPath)
-      ) {
-        await fsPromises.unlink(tempFilePath);
-        console.log("Temporary file cleaned up:", tempFilePath);
-      }
-    } catch (cleanupError) {
-      console.warn("Failed to cleanup temp file:", cleanupError.message);
+    if (tempDownloadPath) {
+      await fsPromises.unlink(tempDownloadPath);
+      console.log("Temporary download file cleaned up:", tempDownloadPath);
     }
 
     processEmbeddingsAsync(savedPdf._id);
@@ -212,17 +128,6 @@ exports.uploadPDF = async (req, res) => {
   } catch (error) {
     console.error("Upload error:", error);
 
-    if (tempFilePath) {
-      try {
-        await fsPromises.unlink(tempFilePath);
-      } catch (cleanupError) {
-        console.warn(
-          "Failed to cleanup temp file on error:",
-          cleanupError.message
-        );
-      }
-    }
-
     if (tempDownloadPath) {
       try {
         await fsPromises.unlink(tempDownloadPath);
@@ -234,17 +139,12 @@ exports.uploadPDF = async (req, res) => {
       }
     }
 
-    if (savedPdf) {
+    if (savedPdf && savedPdf.path) {
       try {
         await PDF.findByIdAndDelete(savedPdf._id);
-        if (savedPdf.isCloudinary && savedPdf.path) {
-          await cloudinary.uploader.destroy(savedPdf.path, {
-            resource_type: "raw",
-          });
-        } else if (savedPdf.path && (await validateFileExists(savedPdf.path))) {
-          const fullPath = getFullPath(savedPdf.path);
-          await fsPromises.unlink(fullPath);
-        }
+        await cloudinary.uploader.destroy(savedPdf.path, {
+          resource_type: "raw",
+        });
       } catch (cleanupError) {
         console.warn(
           "Failed to cleanup saved PDF on error:",
@@ -274,7 +174,7 @@ async function processEmbeddingsAsync(pdfId) {
       return;
     }
 
-    const fileExists = await validateFileExists(pdf.path, pdf.isCloudinary);
+    const fileExists = await validateFileExists(pdf.path);
     if (!fileExists) {
       console.error("PDF file not found for embedding processing:", pdf.path);
       pdf.embeddingStatus = "failed";
@@ -283,11 +183,9 @@ async function processEmbeddingsAsync(pdfId) {
       return;
     }
 
-    if (true) {
-      tempFilePath = path.join(UPLOADS_DIR, `temp_embedding_${Date.now()}.pdf`);
-      await ensureUploadsDirectory();
-      await downloadFromCloudinary(pdf.path, tempFilePath);
-    }
+    tempFilePath = path.join(UPLOADS_DIR, `temp_embedding_${Date.now()}.pdf`);
+    await ensureUploadsDirectory();
+    await downloadFromCloudinary(pdf.path, tempFilePath);
 
     pdf.embeddingStatus = "processing";
     pdf.embeddingProgress = 0;
@@ -329,7 +227,6 @@ async function processEmbeddingsAsync(pdfId) {
         `Embedding generation failed for PDF ${pdfId}:`,
         embeddingError
       );
-
       pdf.embeddingStatus = "failed";
       pdf.embeddingProgress = 0;
       pdf.embeddingError = embeddingError.message;
@@ -340,7 +237,6 @@ async function processEmbeddingsAsync(pdfId) {
       `Critical error in embedding processing for PDF ${pdfId}:`,
       error
     );
-
     try {
       if (pdf) {
         pdf.embeddingStatus = "failed";
@@ -375,12 +271,9 @@ exports.getPDFs = async (req, res) => {
 
     const validatedPdfs = await Promise.all(
       pdfs.map(async (pdf) => {
-        const fileExists = await validateFileExists(pdf.path, pdf.isCloudinary);
+        const fileExists = await validateFileExists(pdf.path);
         const pdfObj = pdf.toObject();
-        return {
-          ...pdfObj,
-          fileExists,
-        };
+        return { ...pdfObj, fileExists };
       })
     );
 
@@ -400,14 +293,14 @@ exports.getEmbeddingStatus = async (req, res) => {
     }
 
     const pdf = await PDF.findById(id).select(
-      "embeddingStatus embeddingProgress embeddingError path isCloudinary"
+      "embeddingStatus embeddingProgress embeddingError path"
     );
 
     if (!pdf) {
       return res.status(404).json({ error: "PDF not found" });
     }
 
-    const fileExists = await validateFileExists(pdf.path, pdf.isCloudinary);
+    const fileExists = await validateFileExists(pdf.path);
 
     res.json({
       status: pdf.embeddingStatus,
@@ -435,7 +328,7 @@ exports.reprocessEmbeddings = async (req, res) => {
       return res.status(404).json({ error: "PDF not found" });
     }
 
-    const fileExists = await validateFileExists(pdf.path, pdf.isCloudinary);
+    const fileExists = await validateFileExists(pdf.path);
     if (!fileExists) {
       return res.status(400).json({
         error: "PDF file not found",
@@ -474,91 +367,23 @@ exports.getPDF = async (req, res) => {
       return res.status(404).json({ error: "PDF not found" });
     }
 
-    if (pdf.isCloudinary) {
-      try {
-        const result = await cloudinary.api.resource(pdf.path, {
-          resource_type: "raw",
-        });
-        console.log("Redirecting to Cloudinary URL:", result.secure_url);
-        return res.redirect(result.secure_url);
-      } catch (cloudinaryError) {
-        console.log("Cloudinary file not found:", pdf.path);
-        pdf.embeddingStatus = "failed";
-        pdf.embeddingError = "File not found in cloud storage";
-        await pdf.save().catch(console.error);
+    try {
+      const result = await cloudinary.api.resource(pdf.path, {
+        resource_type: "raw",
+      });
+      console.log("Redirecting to Cloudinary URL:", result.secure_url);
+      return res.redirect(result.secure_url);
+    } catch (cloudinaryError) {
+      console.log("Cloudinary file not found:", pdf.path);
+      pdf.embeddingStatus = "failed";
+      pdf.embeddingError = "File not found in cloud storage";
+      await pdf.save().catch(console.error);
 
-        return res.status(404).json({
-          error: "PDF file not found in cloud storage",
-          details: "The file is missing. Please re-upload the document.",
-          needsReupload: true,
-        });
-      }
-    } else {
-      const fullPath = getFullPath(pdf.path);
-      console.log("PDF found:", pdf.originalName, "Path:", fullPath);
-
-      const fileExists = await validateFileExists(pdf.path, false);
-      if (!fileExists) {
-        console.log("File not found on disk:", fullPath);
-
-        pdf.embeddingStatus = "failed";
-        pdf.embeddingError = "File not found on disk";
-        await pdf.save().catch(console.error);
-
-        return res.status(404).json({
-          error: "PDF file not found on disk",
-          details:
-            "The physical file is missing. Please re-upload the document.",
-          needsReupload: true,
-        });
-      }
-
-      console.log("File exists, serving PDF...");
-
-      let stat;
-      try {
-        stat = await fsPromises.stat(fullPath);
-      } catch (statError) {
-        console.error("Failed to get file stats:", statError);
-        return res.status(500).json({ error: "Failed to access PDF file" });
-      }
-
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Length", stat.size);
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="${encodeURIComponent(pdf.originalName)}"`
-      );
-      res.setHeader("Accept-Ranges", "bytes");
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-      res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Origin, X-Requested-With, Content-Type, Accept, Range"
-      );
-      res.setHeader(
-        "Access-Control-Expose-Headers",
-        "Content-Length, Content-Range, Accept-Ranges"
-      );
-
-      const range = req.headers.range;
-      if (range) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-        const chunksize = end - start + 1;
-
-        res.status(206);
-        res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
-        res.setHeader("Content-Length", chunksize);
-
-        const stream = fs.createReadStream(fullPath, { start, end });
-        stream.pipe(res);
-      } else {
-        const stream = fs.createReadStream(fullPath);
-        stream.pipe(res);
-      }
+      return res.status(404).json({
+        error: "PDF file not found in cloud storage",
+        details: "The file is missing. Please re-upload the document.",
+        needsReupload: true,
+      });
     }
   } catch (error) {
     console.error("Get PDF error:", error);
@@ -583,19 +408,8 @@ exports.deletePDF = async (req, res) => {
     }
 
     try {
-      if (pdf.isCloudinary) {
-        await cloudinary.uploader.destroy(pdf.path, { resource_type: "raw" });
-        console.log("File deleted from Cloudinary:", pdf.path);
-      } else {
-        const fullPath = getFullPath(pdf.path);
-        const fileExists = await validateFileExists(pdf.path, false);
-        if (fileExists) {
-          await fsPromises.unlink(fullPath);
-          console.log("File deleted from disk:", fullPath);
-        } else {
-          console.log("File already missing from disk:", fullPath);
-        }
-      }
+      await cloudinary.uploader.destroy(pdf.path, { resource_type: "raw" });
+      console.log("File deleted from Cloudinary:", pdf.path);
     } catch (fileError) {
       console.warn("File deletion error:", fileError.message);
     }
@@ -627,7 +441,7 @@ exports.repairPDF = async (req, res) => {
       return res.status(404).json({ error: "PDF not found" });
     }
 
-    const fileExists = await validateFileExists(pdf.path, pdf.isCloudinary);
+    const fileExists = await validateFileExists(pdf.path);
 
     res.json({
       id: pdf._id,
