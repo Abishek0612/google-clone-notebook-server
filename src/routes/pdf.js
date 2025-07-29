@@ -42,17 +42,4 @@ router.get("/pdf/:id/repair", pdfController.repairPDF);
 router.post("/pdf/:id/reprocess-embeddings", pdfController.reprocessEmbeddings);
 router.delete("/pdf/:id", pdfController.deletePDF);
 
-router.use("*", (req, res) => {
-  res.status(404).json({
-    error: "Route not found",
-    path: req.originalUrl,
-    availableRoutes: [
-      "GET /api/pdfs",
-      "GET /api/pdf/:id",
-      "POST /api/pdf/upload",
-      "DELETE /api/pdf/:id",
-    ],
-  });
-});
-
 module.exports = router;
