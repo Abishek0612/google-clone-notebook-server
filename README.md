@@ -43,6 +43,32 @@ A sophisticated Node.js backend application that powers an AI-powered document c
 
 ## Quick Start
 
+## Environment Configuration
+
+### Environment Variables
+
+Create a `.env` file in the root directory with the following variables:
+
+````env
+# Database Configuration
+MONGODB_URI=mongodb+srv://uabishek6:abi%40abi12@cluster0.xblmerd.mongodb.net/notebookllm
+
+NODE_ENV=development
+PORT=5000
+HUGGINGFACE_API_KEY=AIzaSyAb3Dt6ytB4q2QP-sL6F3dbWK9x6qNWBuE
+
+AI_PROVIDER=gemini
+GEMINI_API_KEY=AIzaSyAb3Dt6ytB4q2QP-sL6F3dbWK9x6qNWBuE
+
+MONGODB_URI=mongodb+srv://uabishek6:abi%40abi12@cluster0.xblmerd.mongodb.net/notebookllm
+HUGGINGFACE_MODEL=microsoft/DialoGPT-medium
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+CLOUDINARY_CLOUD_NAME=dsjgl0cbj
+CLOUDINARY_API_KEY=859825451636775
+CLOUDINARY_API_SECRET=JDk7hM26QzLpcBe_1KHsxE3sM28
+FRONTEND_URL=http://localhost:3000
+
+
 ### Prerequisites
 
 - Node.js (v16 or higher)
@@ -55,7 +81,7 @@ A sophisticated Node.js backend application that powers an AI-powered document c
    ```bash
    git clone     -       https://github.com/Abishek0612/google-clone-notebook-server.git
    cd  server
-   ```
+````
 
 ### Install dependencies ( node_modules is deleted)
 
@@ -63,4 +89,4 @@ npm install
 
 ### Start the server
 
-npm start
+npm start or npm run dev
