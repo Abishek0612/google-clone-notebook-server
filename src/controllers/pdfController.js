@@ -403,6 +403,9 @@ exports.getPDF = async (req, res) => {
         timeout: 30000,
       });
 
+      res.removeHeader("X-Frame-Options");
+      res.removeHeader("Content-Security-Policy");
+
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
@@ -420,6 +423,7 @@ exports.getPDF = async (req, res) => {
         "Access-Control-Expose-Headers",
         "Content-Length, Content-Range, Accept-Ranges"
       );
+      res.setHeader("X-Frame-Options", "ALLOWALL");
 
       if (response.headers["content-length"]) {
         res.setHeader("Content-Length", response.headers["content-length"]);

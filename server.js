@@ -7,21 +7,25 @@ require("dotenv").config();
 
 const app = express();
 
-// Trust proxy for cloud deployment
 app.set("trust proxy", 1);
 
-// Rate limiting configuration
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: process.env.NODE_ENV === "development" ? 1000 : 100,
   message: "Too many requests from this IP, please try again later.",
   trustProxy: true,
   skip: (req) => {
-    return req.path === "/health" || req.path === "/";
+    return (
+      req.path === "/health" ||
+      req.path === "/" ||
+      req.path.startsWith("/api/pdfs") ||
+      req.path.startsWith("/api/pdf/") ||
+      req.path.startsWith("/api/conversation/") ||
+      process.env.NODE_ENV === "development"
+    );
   },
 });
 
-// CORS configuration
 const corsOptions = {
   origin: [
     "http://localhost:3000",
@@ -34,19 +38,34 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
-// Middleware
-app.use(
-  helmet({
-    crossOriginEmbedderPolicy: false,
-    contentSecurityPolicy: false,
-  })
-);
+app.use((req, res, next) => {
+  if (
+    req.path.startsWith("/api/pdf/") &&
+    req.method === "GET" &&
+    req.path.match(/^\/api\/pdf\/[a-fA-F0-9]{24}$/)
+  ) {
+    next();
+  } else {
+    helmet({
+      crossOriginEmbedderPolicy: false,
+      contentSecurityPolicy: false,
+    })(req, res, next);
+  }
+});
+
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV === "development") {
+    console.log(`${req.method} ${req.path} - ${new Date().toISOString()}`);
+  }
+  next();
+});
+
 app.use(limiter);
 
-// Health check routes
 app.get("/", (req, res) => {
   res.status(200).json({
     message: "NotebookLM Clone Backend API is running!",
@@ -64,7 +83,6 @@ app.get("/health", (req, res) => {
   });
 });
 
-// API Routes
 try {
   const pdfRoutes = require("./src/routes/pdf");
   const chatRoutes = require("./src/routes/chat");
@@ -84,7 +102,6 @@ try {
   });
 }
 
-// 404 handler
 app.use("*", (req, res) => {
   res.status(404).json({
     error: "Route not found",
@@ -93,7 +110,6 @@ app.use("*", (req, res) => {
   });
 });
 
-// Error handling middleware
 app.use((error, req, res, next) => {
   console.error("Global error handler:", error);
   res.status(500).json({
@@ -105,7 +121,6 @@ app.use((error, req, res, next) => {
   });
 });
 
-// MongoDB connection
 const connectDB = async () => {
   try {
     if (!process.env.MONGODB_URI) {
