@@ -5,7 +5,7 @@ const fsPromises = require("fs").promises;
 const fs = require("fs");
 const path = require("path");
 
-const UPLOADS_DIR = path.join(__dirname, "../../uploads");
+const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 
 const ensureUploadsDirectory = async () => {
   try {
@@ -19,12 +19,22 @@ const ensureUploadsDirectory = async () => {
 const validateFileExists = async (filePath) => {
   try {
     if (!filePath) return false;
-    await fsPromises.access(filePath, fs.constants.F_OK);
-    const stats = await fsPromises.stat(filePath);
+    const fullPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(UPLOADS_DIR, filePath);
+    await fsPromises.access(fullPath, fs.constants.F_OK);
+    const stats = await fsPromises.stat(fullPath);
     return stats.isFile() && stats.size > 0;
   } catch (error) {
     return false;
   }
+};
+
+const getFullPath = (filePath) => {
+  if (!filePath) return null;
+  return path.isAbsolute(filePath)
+    ? filePath
+    : path.join(UPLOADS_DIR, filePath);
 };
 
 const generateSecureFileName = (originalName) => {
@@ -58,10 +68,10 @@ exports.uploadPDF = async (req, res) => {
       "Size:",
       size,
       "Temp path:",
-      filePath
+      tempFilePath
     );
 
-    const fileExists = await validateFileExists(filePath);
+    const fileExists = await validateFileExists(tempFilePath);
     if (!fileExists) {
       throw new Error("Uploaded file not found immediately after upload");
     }
@@ -70,7 +80,7 @@ exports.uploadPDF = async (req, res) => {
     const finalPath = path.join(UPLOADS_DIR, secureFileName);
 
     try {
-      await fsPromises.copyFile(filePath, finalPath);
+      await fsPromises.copyFile(tempFilePath, finalPath);
       console.log("File copied to secure location:", finalPath);
 
       const finalFileExists = await validateFileExists(finalPath);
@@ -104,7 +114,7 @@ exports.uploadPDF = async (req, res) => {
     const pdf = new PDF({
       filename: secureFileName,
       originalName: originalname,
-      path: finalPath,
+      path: secureFileName,
       size,
       pageCount: extractedData.pageCount,
       content: extractedData.text,
@@ -156,7 +166,8 @@ exports.uploadPDF = async (req, res) => {
       try {
         await PDF.findByIdAndDelete(savedPdf._id);
         if (savedPdf.path && (await validateFileExists(savedPdf.path))) {
-          await fsPromises.unlink(savedPdf.path);
+          const fullPath = getFullPath(savedPdf.path);
+          await fsPromises.unlink(fullPath);
         }
       } catch (cleanupError) {
         console.warn(
@@ -186,9 +197,10 @@ async function processEmbeddingsAsync(pdfId) {
       return;
     }
 
+    const fullPath = getFullPath(pdf.path);
     const fileExists = await validateFileExists(pdf.path);
     if (!fileExists) {
-      console.error("PDF file not found for embedding processing:", pdf.path);
+      console.error("PDF file not found for embedding processing:", fullPath);
       pdf.embeddingStatus = "failed";
       pdf.embeddingError = "File not found on disk";
       await pdf.save();
@@ -368,11 +380,12 @@ exports.getPDF = async (req, res) => {
       return res.status(404).json({ error: "PDF not found" });
     }
 
-    console.log("PDF found:", pdf.originalName, "Path:", pdf.path);
+    const fullPath = getFullPath(pdf.path);
+    console.log("PDF found:", pdf.originalName, "Path:", fullPath);
 
     const fileExists = await validateFileExists(pdf.path);
     if (!fileExists) {
-      console.log("File not found on disk:", pdf.path);
+      console.log("File not found on disk:", fullPath);
 
       pdf.embeddingStatus = "failed";
       pdf.embeddingError = "File not found on disk";
@@ -389,14 +402,11 @@ exports.getPDF = async (req, res) => {
 
     let stat;
     try {
-      stat = await fsPromises.stat(pdf.path);
+      stat = await fsPromises.stat(fullPath);
     } catch (statError) {
       console.error("Failed to get file stats:", statError);
       return res.status(500).json({ error: "Failed to access PDF file" });
     }
-
-    res.removeHeader("X-Frame-Options");
-    res.removeHeader("Content-Security-Policy");
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", stat.size);
@@ -406,7 +416,6 @@ exports.getPDF = async (req, res) => {
     );
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Cache-Control", "public, max-age=3600");
-
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
     res.setHeader(
@@ -415,9 +424,8 @@ exports.getPDF = async (req, res) => {
     );
     res.setHeader(
       "Access-Control-Expose-Headers",
-      "Content-Length, Content-Range"
+      "Content-Length, Content-Range, Accept-Ranges"
     );
-    res.setHeader("X-Frame-Options", "ALLOWALL");
 
     const range = req.headers.range;
     if (range) {
@@ -430,10 +438,10 @@ exports.getPDF = async (req, res) => {
       res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
       res.setHeader("Content-Length", chunksize);
 
-      const stream = fs.createReadStream(pdf.path, { start, end });
+      const stream = fs.createReadStream(fullPath, { start, end });
       stream.pipe(res);
     } else {
-      const stream = fs.createReadStream(pdf.path);
+      const stream = fs.createReadStream(fullPath);
       stream.pipe(res);
     }
   } catch (error) {
@@ -459,12 +467,13 @@ exports.deletePDF = async (req, res) => {
     }
 
     try {
+      const fullPath = getFullPath(pdf.path);
       const fileExists = await validateFileExists(pdf.path);
       if (fileExists) {
-        await fsPromises.unlink(pdf.path);
-        console.log("File deleted from disk:", pdf.path);
+        await fsPromises.unlink(fullPath);
+        console.log("File deleted from disk:", fullPath);
       } else {
-        console.log("File already missing from disk:", pdf.path);
+        console.log("File already missing from disk:", fullPath);
       }
     } catch (fileError) {
       console.warn("File deletion error:", fileError.message);
