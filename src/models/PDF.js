@@ -13,6 +13,13 @@ const pdfSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  cloudinaryUrl: {
+    type: String,
+  },
+  isCloudinary: {
+    type: Boolean,
+    default: false,
+  },
   size: {
     type: Number,
     required: true,
