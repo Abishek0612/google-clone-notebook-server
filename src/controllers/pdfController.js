@@ -30,15 +30,14 @@ const validateFileExists = async (filePath) => {
   }
 };
 
-const downloadFromCloudinary = async (publicId, tempPath) => {
+const downloadFromCloudinary = async (url, tempPath) => {
   try {
-    const result = await cloudinary.api.resource(publicId, {
-      resource_type: "raw",
-    });
+    console.log("Downloading from URL:", url);
     const response = await axios({
       method: "get",
-      url: result.secure_url,
+      url: url,
       responseType: "stream",
+      timeout: 30000,
     });
 
     const writer = fs.createWriteStream(tempPath);
@@ -49,7 +48,9 @@ const downloadFromCloudinary = async (publicId, tempPath) => {
       writer.on("error", reject);
     });
   } catch (error) {
-    throw new Error(`Failed to download from Cloudinary: ${error.message}`);
+    throw new Error(
+      `Failed to download from Cloudinary: ${error.message || error}`
+    );
   }
 };
 
@@ -59,6 +60,7 @@ exports.uploadPDF = async (req, res) => {
 
   try {
     console.log("PDF upload started");
+    console.log("Request file:", req.file);
 
     if (!req.file) {
       return res.status(400).json({ error: "No PDF file uploaded" });
@@ -68,9 +70,24 @@ exports.uploadPDF = async (req, res) => {
     const publicId = req.file.public_id;
     const cloudinaryUrl = req.file.path;
 
+    console.log("File details:", {
+      originalname,
+      size,
+      publicId,
+      cloudinaryUrl,
+    });
+
+    if (!publicId || !cloudinaryUrl) {
+      throw new Error(
+        "File upload to Cloudinary failed - missing file details"
+      );
+    }
+
     tempDownloadPath = path.join(UPLOADS_DIR, `temp_${Date.now()}.pdf`);
     await ensureUploadsDirectory();
-    await downloadFromCloudinary(publicId, tempDownloadPath);
+
+    console.log("Downloading file for processing...");
+    await downloadFromCloudinary(cloudinaryUrl, tempDownloadPath);
 
     console.log("Processing file:", originalname, "Size:", size);
 
@@ -99,7 +116,7 @@ exports.uploadPDF = async (req, res) => {
       path: publicId,
       cloudinaryUrl: cloudinaryUrl,
       isCloudinary: true,
-      size,
+      size: size || 0,
       pageCount: extractedData.pageCount,
       content: extractedData.text,
       chunks: chunks.map((chunk) => ({ ...chunk, embedding: [] })),
@@ -174,18 +191,17 @@ async function processEmbeddingsAsync(pdfId) {
       return;
     }
 
-    const fileExists = await validateFileExists(pdf.path);
-    if (!fileExists) {
-      console.error("PDF file not found for embedding processing:", pdf.path);
+    if (!pdf.cloudinaryUrl) {
+      console.error("No Cloudinary URL found for PDF:", pdfId);
       pdf.embeddingStatus = "failed";
-      pdf.embeddingError = "File not found";
+      pdf.embeddingError = "No file URL available";
       await pdf.save();
       return;
     }
 
     tempFilePath = path.join(UPLOADS_DIR, `temp_embedding_${Date.now()}.pdf`);
     await ensureUploadsDirectory();
-    await downloadFromCloudinary(pdf.path, tempFilePath);
+    await downloadFromCloudinary(pdf.cloudinaryUrl, tempFilePath);
 
     pdf.embeddingStatus = "processing";
     pdf.embeddingProgress = 0;
@@ -365,6 +381,11 @@ exports.getPDF = async (req, res) => {
     if (!pdf) {
       console.log("PDF not found in database");
       return res.status(404).json({ error: "PDF not found" });
+    }
+
+    if (pdf.cloudinaryUrl) {
+      console.log("Redirecting to Cloudinary URL:", pdf.cloudinaryUrl);
+      return res.redirect(pdf.cloudinaryUrl);
     }
 
     try {
