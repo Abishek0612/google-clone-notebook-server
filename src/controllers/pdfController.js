@@ -383,17 +383,49 @@ exports.getPDF = async (req, res) => {
       return res.status(404).json({ error: "PDF not found" });
     }
 
-    if (pdf.cloudinaryUrl) {
-      console.log("Redirecting to Cloudinary URL:", pdf.cloudinaryUrl);
-      return res.redirect(pdf.cloudinaryUrl);
-    }
-
     try {
-      const result = await cloudinary.api.resource(pdf.path, {
-        resource_type: "raw",
+      let pdfUrl;
+      if (pdf.cloudinaryUrl) {
+        pdfUrl = pdf.cloudinaryUrl;
+      } else {
+        const result = await cloudinary.api.resource(pdf.path, {
+          resource_type: "raw",
+        });
+        pdfUrl = result.secure_url;
+      }
+
+      console.log("Streaming PDF from URL:", pdfUrl);
+
+      const response = await axios({
+        method: "get",
+        url: pdfUrl,
+        responseType: "stream",
+        timeout: 30000,
       });
-      console.log("Redirecting to Cloudinary URL:", result.secure_url);
-      return res.redirect(result.secure_url);
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(pdf.originalName)}"`
+      );
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Origin, X-Requested-With, Content-Type, Accept, Range"
+      );
+      res.setHeader(
+        "Access-Control-Expose-Headers",
+        "Content-Length, Content-Range, Accept-Ranges"
+      );
+
+      if (response.headers["content-length"]) {
+        res.setHeader("Content-Length", response.headers["content-length"]);
+      }
+
+      response.data.pipe(res);
     } catch (cloudinaryError) {
       console.log("Cloudinary file not found:", pdf.path);
       pdf.embeddingStatus = "failed";
